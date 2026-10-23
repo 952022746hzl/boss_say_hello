@@ -48,8 +48,39 @@ class AppConfig:
     send_attachment: bool = False
     attachment_id: str | None = None
     model_timeout_seconds: int = 180
+    target_title: str = ""
+    native_filters: dict[str, str] = field(default_factory=dict)
+    outsourcing_check: bool = True
+    background_weight: int = 20
+    max_candidates: int = 30
+    max_agent_steps: int = 300
+    max_job_steps: int = 12
+    max_company_searches: int = 3
+    company_cache_days: int = 7
 
     def validate(self, *, ready: bool = False) -> None:
+        if not isinstance(self.target_title, str) or len(self.target_title) > 100:
+            raise ValueError("期望职位须为不超过 100 字的文本")
+        if type(self.outsourcing_check) is not bool:
+            raise ValueError("外包检查开关无效")
+        if type(self.background_weight) is not int or not 0 <= self.background_weight <= 100:
+            raise ValueError("背景权重必须为 0 到 100 的整数")
+        for name, ceiling in (
+            ("max_candidates", 1000),
+            ("max_agent_steps", 3000),
+            ("max_job_steps", 100),
+            ("max_company_searches", 20),
+            ("company_cache_days", 30),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= ceiling:
+                raise ValueError(f"{name} 必须为 1 到 {ceiling} 的整数")
+        allowed_filters = {"经验", "学历", "行业", "公司规模", "融资阶段", "薪资"}
+        if not isinstance(self.native_filters, dict) or any(
+            k not in allowed_filters or not isinstance(v, str) or not v.strip() or len(v) > 60
+            for k, v in self.native_filters.items()
+        ):
+            raise ValueError("原生筛选字段或选项无效")
         if type(self.model_timeout_seconds) is not int or not 10 <= self.model_timeout_seconds <= 1800:
             raise ValueError("模型等待时间必须为 10 到 1800 秒之间的整数")
         for value in (self.salary_min, self.salary_max):
@@ -106,6 +137,9 @@ class Job:
     text: str
     url: str
     contact_status: str = "unknown"
+    company_id: str = ""
+    company_full_name: str = ""
+    company_url: str = ""
 
 
 @dataclass(frozen=True)
