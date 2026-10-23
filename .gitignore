@@ -218,3 +218,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-local documentation and environment files must never be uploaded.
+docs/
+.env*
+*.env
+*.env.*
+env
+env.*
+*.envrc
+*.envrc.*
+
+# Local application data and execution scratch (never distribute).
+.superpowers/
+data/
+/logs/
+/resume/
+chrome_profile/
+browser_profile/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
