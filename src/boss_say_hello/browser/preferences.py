@@ -8,6 +8,30 @@ def compact(value):
     return re.sub(r"\s+", "", value).replace("（", "(").replace("）", ")")
 
 
+def required_filters(config):
+    filters = dict(config.native_filters)
+    if "薪资" not in filters:
+        buckets = [
+            (0, 3000, "3K以下"),
+            (3000, 5000, "3-5K"),
+            (5000, 10000, "5-10K"),
+            (10000, 20000, "10-20K"),
+            (20000, 50000, "20-50K"),
+            (50000, float("inf"), "50K以上"),
+        ]
+        for low, high, label in buckets:
+            if (
+                config.salary_min is not None
+                and config.salary_max is not None
+                and low <= config.salary_min <= config.salary_max <= high
+            ):
+                filters["薪资"] = label
+                break
+        else:
+            raise ValueError("薪资跨越平台档位，请在原生薪资筛选中明确选择一档；不会自动改成不限")
+    return filters
+
+
 def preferences_match(snapshot, config):
     label = compact(f"{config.target_title}({config.cities[0]})")
     if not any(compact(e["label"]) == label and e["selected"] for e in snapshot.get("expectations", [])):
@@ -15,7 +39,10 @@ def preferences_match(snapshot, config):
     if compact(snapshot.get("city", "")) != compact(config.cities[0]):
         return False
     available = {f["field"]: f["selected"] for f in snapshot.get("filters", [])}
-    return all(available.get(key) == [value] for key, value in config.native_filters.items())
+    try:
+        return all(available.get(key) == [value] for key, value in required_filters(config).items())
+    except ValueError:
+        return False
 
 
 def expectation_form_matches(values, config):
@@ -44,7 +71,7 @@ SNAPSHOT = r"""/* PREFERENCES */ JSON.stringify((() => {
  }
  const token=String(performance.timeOrigin)+':'+String(Math.random());
  const controls=[]; const nodes=[]; const seen=new Set();
- for(const scope of scopes) for(const e of scope.querySelectorAll('a,button,input:not([type=hidden]),li,.current-select,.ui-select-selection,.ui-cascader-selection')) {
+ for(const scope of scopes) for(const e of scope.querySelectorAll('a,button,input:not([type=hidden]),li,.city-label,.current-select,.ui-select-selection,.ui-cascader-selection')) {
    if(seen.has(e)||!visible(e)||e.disabled) continue;
    seen.add(e);
    const label=text(e).slice(0,100)||e.getAttribute('placeholder')||'';
@@ -53,7 +80,8 @@ SNAPSHOT = r"""/* PREFERENCES */ JSON.stringify((() => {
    const field=text(e.closest('.form-item')?.querySelector('.item-label'));
    const kind=e.tagName==='INPUT'&&!e.readOnly&&e.type==='text'?'input':'click';
    const id=token+':'+nodes.length;
-   nodes.push({e,label,kind,field}); controls.push({id,label,kind,field});
+   const submit=!!e.closest('.expectation-form') && /^(完成|保存|确定)$/.test(label);
+   nodes.push({e,label,kind,field}); controls.push({id,label,kind,field,submit});
  }
  window.__bossPreferenceControls={token,nodes};
  const expectations=[...document.querySelectorAll('.c-expect-select .expect-item,.recommend-job-btn,.dropdown-expect-list li')].filter(visible).map(e=>({label:text(e),selected:active(e)}));
@@ -91,6 +119,8 @@ def action_script(option_id, value=None):
       const item=state.nodes[Number(id.slice(state.token.length+1))];
       if(!item||!item.e.isConnected||!item.e.getClientRects().length||item.e.disabled) return {acted:false};
       const e=item.e;
+      const label=(e.innerText||e.textContent||'').trim().slice(0,100)||e.getAttribute('placeholder')||'';
+      if(label!==item.label||getComputedStyle(e).visibility==='hidden') return {acted:false};
       if(item.kind==='input') {
         if(typeof value!=='string')return {acted:false};
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,value);

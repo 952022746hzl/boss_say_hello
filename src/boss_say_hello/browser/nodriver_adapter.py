@@ -42,6 +42,9 @@ def parse_job(account_id, card, detail):
         detail.get("text", ""),
         card.get("url", ""),
         "new" if label == "立即沟通" else "contacted" if label == "继续沟通" else "unknown",
+        detail.get("company_id", ""),
+        detail.get("company_full_name", ""),
+        detail.get("company_url", ""),
     )
 
 
@@ -57,16 +60,25 @@ class NodriverAdapter:
         self.preference_state = None
         self.goal = None
         self.preference_submitted = False
+        self.candidate_seen = set()
+        self.expectations_seen = set()
 
     def bind_goal(self, config):
         self.goal = config
         self.preference_state = None
         self.preference_submitted = False
+        self.candidate_seen = set()
+        self.expectations_seen = set()
 
     async def preference_snapshot(self):
         from boss_say_hello.browser.preferences import SNAPSHOT
 
         self.preference_state = await self.evaluate(self.list_tab, SNAPSHOT)
+        from boss_say_hello.browser.preferences import compact
+
+        self.expectations_seen.update(
+            compact(e["label"]) for e in self.preference_state.get("expectations", [])
+        )
         return self.preference_state
 
     async def preference_action(self, action, option_id, value=None):
@@ -81,9 +93,11 @@ class NodriverAdapter:
         option = options[0]
         if action == "input" and value not in {self.goal.target_title, self.goal.cities[0]}:
             raise BrowserFailure("输入内容必须来自本轮职位或城市")
-        if option["label"] in {"完成", "保存", "确定"}:
+        if option.get("submit", option["label"] in {"完成", "保存"}):
             target = compact(f"{self.goal.target_title}({self.goal.cities[0]})")
-            if any(compact(e["label"]) == target for e in self.preference_state.get("expectations", [])):
+            if target in self.expectations_seen or any(
+                compact(e["label"]) == target for e in self.preference_state.get("expectations", [])
+            ):
                 raise BrowserFailure("已有相同职位和城市的期望，请复用并核对，不重复新增")
             if not self.preference_state.get("adding") or self.preference_submitted:
                 raise BrowserFailure("仅可新增一次已核实的求职期望；未知结果请先核对")
@@ -247,6 +261,41 @@ class NodriverAdapter:
                 raise BrowserFailure("推荐列表未继续加载，无法确认是否到底；本轮已停止")
             await self.evaluate(self.list_tab, dom.SCROLL)
             await asyncio.sleep(1)
+
+    async def candidate_batch(self):
+        session = await self.session()
+        if not session.logged_in or not session.account_id:
+            raise BrowserFailure("登录失效")
+        for _attempt in range(self.poll_attempts):
+            snapshot = await self.evaluate(self.list_tab, dom.CARDS)
+            cards = [
+                c
+                for c in snapshot.get("cards", [])
+                if c.get("url") not in self.candidate_seen and job_id(c.get("url", ""))
+            ]
+            batch = cards[:5]
+            self.candidate_seen.update(c["url"] for c in batch)
+            if batch or snapshot.get("ended"):
+                return {
+                    "jobs": [parse_job(session.account_id, c, {}) for c in batch],
+                    "ended": bool(snapshot.get("ended")) and len(cards) <= 5,
+                }
+            self.guard()
+            await self.evaluate(self.list_tab, dom.SCROLL)
+            await asyncio.sleep(1)
+        raise BrowserFailure("列表未继续加载，无法确认是否到底，请检查页面")
+
+    async def open_preferences(self, destination):
+        self.guard()
+        urls = {
+            "recommendations": dom.RECOMMEND_URL,
+            "expectations": "https://www.zhipin.com/web/geek/resume/",
+        }
+        if destination not in urls:
+            raise BrowserFailure("不支持的页面")
+        await self.list_tab.get(urls[destination])
+        await asyncio.sleep(1)
+        return await self.preference_snapshot()
 
     async def read_detail(self, url):
         if not job_id(url):
