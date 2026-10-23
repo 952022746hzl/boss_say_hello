@@ -39,6 +39,7 @@ FIELDS = {
     "stack",
 }
 MESSAGES = {
+    "browser.closed": "浏览器已退出，已暂停任务；点击打开 BOSS 登录可重新启动",
     "app.ready": "后台服务已就绪",
     "app.closed": "后台服务已关闭",
     "operation.started": "后台操作开始",

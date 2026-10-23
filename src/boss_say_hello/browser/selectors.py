@@ -53,6 +53,8 @@ DETAIL = r"""/* DETAIL */ JSON.stringify((() => {
  return {url:info?.encryptId ? 'https://www.zhipin.com/job_detail/'+info.encryptId+'.html' : location.href,
   text:info?.postDescription || text('.job-detail-body, .job-sec-text'),
   title:info?.jobName || text('.job-name, .name h1'), company:data?.brandComInfo?.brandName || text('.company-name'),
+  company_id:data?.brandComInfo?.encryptBrandId || '',company_full_name:data?.brandComInfo?.companyName || text('.company-info .company-name'),
+  company_url:(box||document).querySelector('a[href*="/gongsi/"]')?.href || '',company_text:text('.company-info, .job-company-info'),
   salary:info?.salaryDesc || text('.job-salary, .salary'), city:info?.locationName || text('.job-area, .job-location'),
   contact:text('.op-btn-chat'), recruiter_id:info?.encryptUserId || (box||document).querySelector('[data-boss-id]')?.getAttribute('data-boss-id') || null};
 })())"""

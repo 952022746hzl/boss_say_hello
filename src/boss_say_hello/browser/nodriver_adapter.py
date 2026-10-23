@@ -54,6 +54,68 @@ class NodriverAdapter:
         self.detail_tab = None
         self.active_job = None
         self.control = None
+        self.preference_state = None
+        self.goal = None
+        self.preference_submitted = False
+
+    def bind_goal(self, config):
+        self.goal = config
+        self.preference_state = None
+        self.preference_submitted = False
+
+    async def preference_snapshot(self):
+        from boss_say_hello.browser.preferences import SNAPSHOT
+
+        self.preference_state = await self.evaluate(self.list_tab, SNAPSHOT)
+        return self.preference_state
+
+    async def preference_action(self, action, option_id, value=None):
+        from boss_say_hello.browser.preferences import action_script, compact, expectation_form_matches
+
+        self.guard()
+        if self.goal is None or self.preference_state is None:
+            raise BrowserFailure("请先读取本轮平台筛选控件")
+        options = [c for c in self.preference_state["controls"] if c["id"] == option_id]
+        if len(options) != 1 or action != options[0]["kind"]:
+            raise BrowserFailure("控件已变化或操作类型不匹配")
+        option = options[0]
+        if action == "input" and value not in {self.goal.target_title, self.goal.cities[0]}:
+            raise BrowserFailure("输入内容必须来自本轮职位或城市")
+        if option["label"] in {"完成", "保存", "确定"}:
+            target = compact(f"{self.goal.target_title}({self.goal.cities[0]})")
+            if any(compact(e["label"]) == target for e in self.preference_state.get("expectations", [])):
+                raise BrowserFailure("已有相同职位和城市的期望，请复用并核对，不重复新增")
+            if not self.preference_state.get("adding") or self.preference_submitted:
+                raise BrowserFailure("仅可新增一次已核实的求职期望；未知结果请先核对")
+            if not expectation_form_matches(self.preference_state["form_values"], self.goal):
+                raise BrowserFailure("期望字段与配置不一致，不能保存")
+            self.preference_submitted = True
+        self.guard()
+        result = await self.evaluate(self.list_tab, action_script(option_id, value))
+        if not result.get("acted"):
+            raise BrowserFailure("控件已失效，未执行操作")
+        await asyncio.sleep(0.4)
+        return await self.preference_snapshot()
+
+    async def verify_preferences(self, receipt):
+        from boss_say_hello.browser.preferences import preferences_match
+
+        current = await self.preference_snapshot()
+        return bool(
+            self.goal
+            and current["document"] == receipt.get("document")
+            and preferences_match(current, self.goal)
+        )
+
+    async def company_info(self, job):
+        raw = await self.read_detail(job.url)
+        return {
+            "id": raw.get("company_id", ""),
+            "name": raw.get("company_full_name") or raw.get("company") or job.company,
+            "city": job.city,
+            "url": raw.get("company_url") or job.url,
+            "text": raw.get("company_text", ""),
+        }
 
     def bind_control(self, control):
         self.control = control
@@ -137,6 +199,7 @@ class NodriverAdapter:
             raise BrowserFailure("页面读取失败，请检查浏览器或重新登录") from None
 
     async def open(self, profile):
+        self.discard_exited_browser()
         if self.browser is None:
             import nodriver
 
@@ -147,10 +210,19 @@ class NodriverAdapter:
             await self.list_tab.get(dom.RECOMMEND_URL)
 
     async def session(self):
+        self.discard_exited_browser()
         if self.list_tab is None:
             return SessionInfo(None, False)
         raw = await self.evaluate(self.list_tab, dom.SESSION)
         return SessionInfo(raw.get("account_id"), bool(raw.get("logged_in")))
+
+    def discard_exited_browser(self):
+        process = getattr(self.browser, "_process", None)
+        if process is not None and getattr(process, "returncode", None) is not None:
+            self.browser = self.list_tab = self.detail_tab = self.active_job = None
+            if self.control:
+                self.control.pause_requested.set()
+            record("browser.closed")
 
     async def iter_recommended(self):
         seen = set()
