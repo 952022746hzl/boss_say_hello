@@ -23,6 +23,9 @@ def test_settings_restart_disables_delivery(tmp_path):
         {"interval_seconds": 0},
         {"interval_seconds": float("nan")},
         {"max_contacts": True},
+        {"model_timeout_seconds": 0},
+        {"model_timeout_seconds": True},
+        {"model_timeout_seconds": 1801},
     ],
 )
 def test_invalid_config_rejected(change):
@@ -48,3 +51,14 @@ def test_atomic_save_keeps_old_config_on_failure(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         store.save(replace(AppConfig(), cities=("北京",)))
     assert (tmp_path / "settings.json").read_bytes() == old
+
+
+def test_model_timeout_persists_and_old_settings_receive_default(tmp_path):
+    from boss_say_hello.domain import AppConfig
+    from boss_say_hello.storage.settings import ConfigStore
+
+    (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+    store = ConfigStore(tmp_path)
+    assert store.load().model_timeout_seconds == 180
+    store.save(replace(AppConfig(), model_timeout_seconds=240))
+    assert ConfigStore(tmp_path).load().model_timeout_seconds == 240

@@ -233,6 +233,7 @@ env.*
 # Local application data and execution scratch (never distribute).
 .superpowers/
 data/
+workspace/
 /logs/
 /resume/
 chrome_profile/

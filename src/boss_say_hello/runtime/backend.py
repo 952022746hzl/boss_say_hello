@@ -1,6 +1,7 @@
 """Owned by the worker's asyncio loop; widgets never access these stores."""
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -15,7 +16,13 @@ from boss_say_hello.matching.service import MatchingService
 from boss_say_hello.resume.service import ResumeService
 from boss_say_hello.runs.control import Clock
 from boss_say_hello.runs.engine import RunEngine
-from boss_say_hello.storage.credentials import CredentialStore, credential_scope
+from boss_say_hello.storage.credentials import (
+    CredentialStore,
+    CredentialUnavailable,
+    credential_scope,
+    normalize_secret,
+)
+from boss_say_hello.storage.json_file import write_json
 from boss_say_hello.storage.paths import data_root
 from boss_say_hello.storage.records import RecordStore
 from boss_say_hello.storage.settings import ConfigStore
@@ -35,9 +42,19 @@ class Backend:
         self.log = None
 
     def emit_event(self, event):
+        if self.store and event.run_id and event.kind != "state":
+            self.export_history()
         if self.log:
             self.log.event(event)
         self.emit(event)
+
+    def export_history(self):
+        try:
+            self.store.export_history(self.root / "history" / "jobs.json")
+        except OSError as exc:
+            # The SQLite journal remains authoritative even if the readable export fails.
+            if self.log:
+                self.log.failure("history.export_failed", exc)
 
     def notice(self, kind, **payload):
         self.emit_event(RunEvent("", kind, payload))
@@ -51,26 +68,40 @@ class Backend:
                 self.root / "logs", lambda entry: self.emit(RunEvent("", "log", {"entry": entry}))
             )
             self.notice("logs_ready", path=self.log.root, entries=self.log.tail())
-            self.settings = ConfigStore(self.root)
+            self.settings = ConfigStore(self.root / "config")
+            self.draft_path = self.root / "config" / "resume_draft.json"
             self.config = self.settings.load()
             self.store = RecordStore(self.root / "records.sqlite3")
             self.journal = DeliveryJournal(self.store)
             self.journal.recover_incomplete()
+            self.export_history()
             self.initialized = True
             self.log.record("journal.recovered")
             self.log.record("app.ready")
 
     async def load_settings(self):
         self.notice("settings", config=self.config)
+        self.notice("workspace", path=self.root)
+        if self.config.base_url:
+            try:
+                secret = await self.secret(self.config)
+                if secret:
+                    self.notice("credential", scope=credential_scope(self.config), secret=secret)
+            except CredentialUnavailable:
+                self.notice("notice", message="无法读取系统凭据，请在配置页重新输入密钥并测试连接")
         version = self.store.latest_resume()
         if version:
             self.notice("resume", version=version, generation=0)
+        if self.draft_path.exists():
+            draft = json.loads(self.draft_path.read_text(encoding="utf-8"))
+            if draft["source_id"] == (version.id if version else None):
+                self.notice("resume_draft", draft=draft)
+        await self.load_history(None)
         self.notice("notice", message=f"本地数据目录：{self.root}")
 
     async def save_settings(self, config):
         self.config = self.settings.save(config)
-        self.notice("settings", config=self.config)
-        self.notice("notice", message="配置已保存，仅影响下一轮任务")
+        self.notice("settings_saved", config=self.config)
 
     def credential_config(self, config):
         # Never read a legacy credential that was not bound to an endpoint.
@@ -81,8 +112,7 @@ class Backend:
         return config
 
     async def use_credential(self, config, secret):
-        if not secret.strip():
-            raise ValueError("请输入非空密钥")
+        secret = normalize_secret(secret)
         self.secrets[credential_scope(self.credential_config(config))] = secret
         self.notice("notice", message="密钥已绑定当前 API 地址，仅保存在本次会话内存中")
 
@@ -99,22 +129,42 @@ class Backend:
         return await asyncio.to_thread(self.credentials.get, scope) or ""
 
     async def test_connection(self, config, secret):
-        ai = AiService(config, secret or await self.secret(config))
+        config.validate(ready=True)
+        await self.save_settings(config)
+        secret = secret or await self.secret(config)
+        ai = AiService(config, secret)
         try:
             await ai.test_connection()
         finally:
             await ai.close()
-        self.notice("notice", message="连接测试成功；未发送简历，未自动保存密钥")
+        if secret:
+            await self.use_credential(config, secret)
+            try:
+                await asyncio.to_thread(self.credentials.save, credential_scope(config), secret)
+            except CredentialUnavailable:
+                self.notice(
+                    "notice", message="连接测试成功，但系统凭据保存失败；密钥仅本次有效，下次需重新输入"
+                )
+                return
+        self.notice("notice", message="连接测试成功，配置和密钥已自动保存，下次启动会恢复")
 
-    async def import_resume(self, path, generation):
-        config = self.config
-        ai = AiService(config, await self.secret(config))
+    async def import_resume(self, path, generation, config, secret=""):
+        config.validate(ready=True)
+        ai = AiService(config, secret or await self.secret(config))
         self.notice("notice", message="正在提取 PDF 并生成关键词、摘要，请稍候")
         try:
             version = await ResumeService(self.store, ai, self.root / "resumes").import_pdf(path)
         finally:
             await ai.close()
         self.notice("resume", version=version, generation=generation)
+        self.draft_path.unlink(missing_ok=True)
+
+    async def save_resume_draft(self, source_id, keywords, summary, generation):
+        latest = self.store.latest_resume()
+        if source_id != (latest.id if latest else None):
+            raise ValueError("简历来源已变化，草稿尚未保存；请重新载入当前简历后编辑")
+        write_json(self.draft_path, {"source_id": source_id, "keywords": keywords, "summary": summary})
+        self.notice("resume_draft_saved", generation=generation)
 
     async def confirm_resume(self, version, keywords, summary, generation):
         service = ResumeService(self.store, None)
@@ -122,6 +172,7 @@ class Backend:
         source = self.store.get_resume(version.id)
         draft = service.revise(source, keywords, summary)
         confirmed = service.confirm(draft)
+        self.draft_path.unlink(missing_ok=True)
         self.notice("resume", version=confirmed, generation=generation)
 
     async def open_login(self):
@@ -141,6 +192,7 @@ class Backend:
             )
 
     async def load_history(self, run_id):
+        self.export_history()
         if run_id is None:
             self.notice("history_runs", runs=self.store.list_runs())
         else:

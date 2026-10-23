@@ -13,6 +13,19 @@ from boss_say_hello.runtime.control import RunControl
 from tests.fakes.browser import FakeBrowser
 
 
+async def test_session_key_normalized_and_bad_replacement_keeps_previous(tmp_path, config):
+    b = Backend(lambda e: None, root=tmp_path, browser=FakeBrowser())
+    await b.initialize()
+    try:
+        await b.use_credential(config(), "  test-key\r\n")
+        assert await b.secret(config()) == "test-key"
+        with pytest.raises(ValueError):
+            await b.use_credential(config(), "bad\nkey")
+        assert await b.secret(config()) == "test-key"
+    finally:
+        await b.close()
+
+
 @pytest.mark.parametrize("persistent", [False, True])
 async def test_endpoint_change_never_reuses_other_provider_key(tmp_path, config, monkeypatch, persistent):
     b = Backend(lambda e: None, root=tmp_path, browser=FakeBrowser())

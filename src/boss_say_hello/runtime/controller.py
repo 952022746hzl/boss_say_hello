@@ -23,6 +23,7 @@ class Controller(QObject):
         self.resume_ready = False
         self.generation = 0
         self.run_pending = False
+        self.import_pending = False
         self.default_warning_visible = False
         worker.event.connect(self.receive)
 
@@ -36,6 +37,10 @@ class Controller(QObject):
             self.resume_ready = self.current_resume.confirmed
         if event.kind == "run_idle":
             self.run_pending = False
+        if event.kind == "resume_import_idle":
+            self.import_pending = False
+        if event.kind == "resume_draft":
+            self.resume_ready = False
         self.event.emit(event)
 
     def submit(self, method, *args):
@@ -54,6 +59,7 @@ class Controller(QObject):
                         operation=method,
                         duration_ms=round((time.monotonic() - started) * 1000),
                     )
+                return True
             except (ValueError, CredentialUnavailable, BrowserFailure) as exc:
                 self.log_failure("operation.failed", exc, operation=method)
                 self.worker.event.emit(RunEvent("", "ui_error", {"message": str(exc)}))
@@ -78,6 +84,9 @@ class Controller(QObject):
             finally:
                 if method == "run":
                     self.worker.event.emit(RunEvent("", "run_idle", {}))
+                if method == "import_resume":
+                    self.worker.event.emit(RunEvent("", "resume_import_idle", {}))
+            return False
 
         return self.worker.submit(call())
 
@@ -121,13 +130,21 @@ class Controller(QObject):
         self.resume_ready = False
         self.event.emit(RunEvent("", "resume_dirty", {}))
 
-    def import_resume(self, path):
+    def import_resume(self, path, config, secret=""):
+        if self.import_pending:
+            raise ValueError("简历正在提炼，请等待当前导入结束")
+        config.validate(ready=True)
         self.invalidate_resume()
-        return self.submit("import_resume", path, self.generation)
+        self.import_pending = True
+        self.event.emit(RunEvent("", "resume_import_pending", {}))
+        return self.submit("import_resume", path, self.generation, config, secret)
 
     def confirm_resume(self, version, keywords, summary):
         self.invalidate_resume()
         return self.submit("confirm_resume", version, keywords, summary, self.generation)
+
+    def save_resume_draft(self, source_id, keywords, summary):
+        return self.submit("save_resume_draft", source_id, keywords, summary, self.generation)
 
     def start_run(self, config, resume=None):
         if self.run_pending:

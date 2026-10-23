@@ -1,5 +1,6 @@
 import json
 
+from boss_say_hello.diagnostics import record
 from boss_say_hello.domain import Assessment, Greeting
 
 
@@ -13,6 +14,19 @@ class AiFailure(RuntimeError):
 def decode(content: str) -> dict:
     try:
         result = json.loads(content)
+    except json.JSONDecodeError as exc:
+        record(
+            "ai.response.invalid_json",
+            level="ERROR",
+            code="invalid_json",
+            char_count=len(content),
+            json_error_position=exc.pos,
+            json_error_line=exc.lineno,
+            json_error_column=exc.colno,
+        )
+        raise AiFailure(
+            "invalid_json", "模型已返回，但内容不是有效 JSON，本次结果不可用，请重新评估"
+        ) from None
     except (ValueError, TypeError):
         raise AiFailure("invalid_json") from None
     if not isinstance(result, dict):

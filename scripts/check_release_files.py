@@ -19,6 +19,7 @@ def check_release_files(paths: list[str]) -> list[str]:
         "browser_profile",
         "chrome_profile",
         "resumes",
+        "workspace",
     }
     for path in paths:
         parts = PurePosixPath(path.replace("\\", "/").lower()).parts

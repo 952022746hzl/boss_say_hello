@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from boss_say_hello.domain import ResumeVersion, RunEvent, RunSnapshot, resume_from_dict, snapshot_from_dict
+from boss_say_hello.storage.json_file import write_json
 
 
 class RecordStore:
@@ -111,6 +112,64 @@ class RecordStore:
                     )
                 )
         return events
+
+    def export_history(self, path: Path) -> None:
+        jobs = {}
+        runs = []
+        for run in reversed(self.list_runs()):
+            metadata = {
+                "run_id": run.id,
+                "account_id": run.account_id,
+                "created_at": run.created_at,
+                "mode": "auto" if run.config.auto_send else "preview",
+            }
+            runs.append(metadata)
+            encounters = {}
+            for event in self.events(run.id):
+                payload = event.payload
+                if event.kind == "finished":
+                    metadata["status"] = payload["status"]
+                job_id = payload.get("job_id")
+                if not job_id:
+                    continue
+                key = (run.account_id, job_id)
+                if key not in jobs:
+                    jobs[key] = {
+                        "account_id": run.account_id,
+                        "job_id": job_id,
+                        "browsed": False,
+                        "message_sent": False,
+                        "result_unknown": False,
+                        "skip_auto_contact": False,
+                        "encounters": [],
+                    }
+                row = jobs[key]
+                if job_id not in encounters:
+                    encounters[job_id] = {
+                        "run_id": run.id,
+                        "created_at": run.created_at,
+                        "mode": metadata["mode"],
+                    }
+                    row["encounters"].append(encounters[job_id])
+                encounter = encounters[job_id]
+                if event.kind == "job":
+                    row["browsed"] = True
+                    row["job"] = payload["job"]
+                    row["skip_auto_contact"] |= payload["job"].get("contact_status") == "contacted"
+                elif event.kind in ("assessment", "check", "greeting", "delivery", "error"):
+                    encounter[event.kind] = {k: v for k, v in payload.items() if k != "job_id"}
+        # Confirmed sends and deduplication are derived from the durable journal, never from drafts.
+        for contact in self.db.execute("SELECT * FROM contacts WHERE cancelled=0"):
+            row = jobs.get((contact["account_id"], contact["job_id"]))
+            if row is None:
+                continue
+            row["skip_auto_contact"] = True
+            for stage in self.db.execute(
+                "SELECT stage,outcome FROM delivery_attempts WHERE contact_id=?", (contact["id"],)
+            ):
+                row["message_sent"] |= stage["stage"] == "message" and stage["outcome"] == "succeeded"
+                row["result_unknown"] |= stage["outcome"] in ("intent", "unknown")
+        write_json(path, {"schema_version": 1, "jobs": list(jobs.values()), "runs": runs})
 
     def close(self) -> None:
         self.db.close()

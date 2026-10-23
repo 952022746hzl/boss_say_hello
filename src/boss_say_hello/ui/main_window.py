@@ -14,6 +14,7 @@ class MainWindow(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
+        self.close_save_futures = None
         self.setWindowTitle("BOSS 求职助手")
         self.resize(1100, 760)
         central = QWidget()
@@ -25,7 +26,7 @@ class MainWindow(QMainWindow):
         self.login = LoginPanel(controller)
         layout.addWidget(self.login)
         self.settings = SettingsPage(controller)
-        self.resume = ResumePage(controller)
+        self.resume = ResumePage(controller, self.resume_config)
         self.run = RunPage(controller, self.run_config)
         self.history = HistoryPage(controller)
         self.logs = LogPage()
@@ -46,10 +47,20 @@ class MainWindow(QMainWindow):
         )
         controller.event.connect(self.on_event)
 
+    def resume_config(self):
+        try:
+            config = self.settings.read_config(ready=True)
+            return config, self.settings.read_secret(config)
+        except ValueError as exc:
+            self.tabs.setCurrentWidget(self.settings)
+            self.settings.status.setText(str(exc))
+            raise
+
     def run_config(self):
         config = self.settings.read_config(ready=True)
         if self.settings.secret.text():
-            self.settings.use_key()
+            if not self.settings.use_key():
+                raise ValueError(self.settings.status.text())
         return config
 
     def on_event(self, event):
@@ -60,11 +71,27 @@ class MainWindow(QMainWindow):
             self.logs.set_location(p["path"], p["entries"])
         elif event.kind == "settings":
             self.settings.set_config(p["config"])
+        elif event.kind == "settings_saved":
+            self.settings.acknowledge_save(p["config"])
+        elif event.kind == "workspace":
+            self.settings.set_workspace(p["path"])
+            self.history.location.setText(f"岗位记录文件：{p['path'] / 'history' / 'jobs.json'}")
+        elif event.kind == "credential":
+            self.settings.restore_secret(p["scope"], p["secret"])
         elif event.kind == "resume":
             self.resume.set_version(p["version"])
             self.run.set_ready(p["version"].confirmed)
         elif event.kind == "resume_dirty":
             self.run.set_ready(False)
+        elif event.kind == "resume_import_pending":
+            self.resume.set_importing(True)
+        elif event.kind == "resume_import_idle":
+            self.resume.set_importing(False)
+        elif event.kind == "resume_draft":
+            self.resume.restore_draft(p["draft"])
+            self.run.set_ready(False)
+        elif event.kind == "resume_draft_saved":
+            self.resume.acknowledge_save(p["generation"])
         elif event.kind == "session":
             self.login.update_session(p["session"])
         elif event.kind == "platform":
@@ -76,7 +103,7 @@ class MainWindow(QMainWindow):
         elif event.kind in ("notice", "ui_error"):
             self.statusBar().showMessage(p["message"])
             self.settings.status.setText(p["message"])
-            if p.get("code") == "missing_key":
+            if p.get("code") in ("missing_key", "invalid_key", "authentication_failed"):
                 mark_invalid(self.settings.secret, True)
         elif event.kind == "run_pending":
             self.run.active = True
@@ -88,6 +115,33 @@ class MainWindow(QMainWindow):
             self.run.on_event(event)
 
     def closeEvent(self, event):
+        if not self.controller.control.closing.is_set():
+            if self.close_save_futures is None and (self.settings.dirty or self.resume.dirty):
+                try:
+                    self.close_save_futures = [
+                        future
+                        for future in (self.settings.flush_save(), self.resume.flush_save())
+                        if future is not None
+                    ]
+                    self.settings.setEnabled(False)
+                    self.resume.setEnabled(False)
+                except ValueError as exc:
+                    self.tabs.setCurrentWidget(self.settings)
+                    self.settings.status.setText(f"关闭前保存失败：{exc}")
+                    event.ignore()
+                    return
+            if self.close_save_futures is not None:
+                if not all(future.done() for future in self.close_save_futures):
+                    event.ignore()
+                    QTimer.singleShot(100, self.close)
+                    return
+                if any(future.result() is False for future in self.close_save_futures):
+                    self.close_save_futures = None
+                    self.settings.setEnabled(True)
+                    self.resume.setEnabled(True)
+                    self.settings.status.setText("配置保存失败，请检查工作目录权限后重试关闭")
+                    event.ignore()
+                    return
         self.controller.close()
         if self.controller.worker.isRunning():
             event.ignore()

@@ -21,7 +21,14 @@ FIELDS = {
     "score",
     "count",
     "duration_ms",
+    "read_timeout_seconds",
+    "finish_reason",
+    "json_error_position",
+    "json_error_line",
+    "json_error_column",
     "error_type",
+    "cause_types",
+    "http_status",
     "operation",
     "code",
     "char_count",
@@ -39,7 +46,8 @@ MESSAGES = {
     "operation.failed": "后台操作失败",
     "operation.cancelled": "后台操作已取消",
     "ai.request.started": "模型请求开始",
-    "ai.request.succeeded": "模型请求完成",
+    "ai.request.succeeded": "模型响应已收到",
+    "ai.response.invalid_json": "模型响应 JSON 解析失败",
     "ai.request.failed": "模型请求失败",
     "browser.read.started": "读取浏览器页面",
     "browser.read.succeeded": "页面读取完成",
@@ -57,12 +65,16 @@ MESSAGES = {
     "run.error": "岗位或运行发生错误",
     "session": "登录检测完成",
     "settings": "配置已加载或保存",
+    "settings_saved": "配置已自动保存到本地工作目录",
     "resume": "简历版本已更新",
+    "resume_draft": "本地简历编辑草稿已恢复",
+    "resume_draft_saved": "关键词与经历摘要草稿已自动保存",
     "pause.requested": "用户请求暂停",
     "resume.requested": "用户请求继续",
     "app.unhandled": "捕获未处理异常",
     "history_runs": "运行历史已读取",
     "history_events": "运行详情已读取",
+    "history.export_failed": "岗位 JSON 导出失败，完整记录仍保存在本地数据库",
     "platform": "平台能力检查完成",
     "journal.recovered": "已核对上次未完成的发送步骤",
     "delivery.reserved": "联系名额已预留",
@@ -130,7 +142,21 @@ class EventLog:
             {"file": Path(f.filename).name, "line": f.lineno, "function": f.name}
             for f in traceback.extract_tb(exc.__traceback__)
         ]
-        self.record(event, level="ERROR", error_type=type(exc).__name__, stack=stack, **fields)
+        cause_types = []
+        seen = {id(exc)}
+        cause = exc.__cause__ or exc.__context__
+        while cause is not None and id(cause) not in seen and len(cause_types) < 5:
+            seen.add(id(cause))
+            cause_types.append(type(cause).__name__)
+            cause = cause.__cause__ or cause.__context__
+        self.record(
+            event,
+            level="ERROR",
+            error_type=type(exc).__name__,
+            cause_types=cause_types,
+            stack=stack,
+            **fields,
+        )
 
     def event(self, event):
         p = event.payload
@@ -140,7 +166,7 @@ class EventLog:
                 fields[key] = p[key]
         if event.kind == "session":
             fields.update(logged_in=p["session"].logged_in, account_verified=bool(p["session"].account_id))
-        elif event.kind == "settings":
+        elif event.kind in ("settings", "settings_saved"):
             fields["revision"] = p["config"].revision
         elif event.kind == "resume":
             fields["char_count"] = len(p["version"].summary)
@@ -150,7 +176,7 @@ class EventLog:
             fields["count"] = p["contacts"]
         elif event.kind == "platform":
             fields["status"] = p["caps"].initial_contact_behavior
-        if event.kind in ("notice", "ui_error", "log", "logs_ready"):
+        if event.kind in ("notice", "ui_error", "log", "logs_ready", "credential"):
             return
         level = (
             "ERROR"

@@ -4,6 +4,15 @@ from urllib.parse import urlsplit, urlunsplit
 import keyring
 
 
+def normalize_secret(secret: str) -> str:
+    secret = secret.strip()
+    if not secret:
+        raise ValueError("请输入非空 API 密钥")
+    if any(not 33 <= ord(char) <= 126 for char in secret):
+        raise ValueError("API 密钥含空格、换行或非英文字符，请重新复制完整密钥，不要包含说明文字")
+    return secret
+
+
 def credential_scope(config):
     config.validate()
     if not config.base_url:
@@ -21,6 +30,7 @@ class CredentialStore:
     service = "BossSayHello"
 
     def save(self, id: str, secret: str) -> None:
+        secret = normalize_secret(secret)
         try:
             keyring.set_password(self.service, id, secret)
         except Exception:

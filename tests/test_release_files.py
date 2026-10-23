@@ -23,6 +23,7 @@ def test_private_resume_and_env_rejected():
         "browser_profile/Cookies",
         "records.sqlite3",
         "src/secret.envrc",
+        "workspace/config/settings.json",
     ]
     assert checker()(paths) == paths
 

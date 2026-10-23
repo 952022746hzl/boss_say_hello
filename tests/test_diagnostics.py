@@ -76,3 +76,23 @@ def test_log_page_filters_and_bounds_view(qtbot):
             }
         )
     assert len(page.entries) <= 1000
+
+
+def test_failure_logs_underlying_types_without_exception_messages(tmp_path):
+    from boss_say_hello.diagnostics import EventLog
+
+    log = EventLog(tmp_path)
+    try:
+        try:
+            try:
+                raise ValueError("private-key private-resume")
+            except ValueError as exc:
+                raise RuntimeError("private-key") from exc
+        except RuntimeError as exc:
+            log.failure("operation.failed", exc)
+        entry = log.tail()[-1]
+        assert entry["fields"]["cause_types"] == ["ValueError"]
+        assert "private-key" not in json.dumps(entry)
+        assert "private-resume" not in json.dumps(entry)
+    finally:
+        log.close()

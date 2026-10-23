@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt6.QtCore import QSignalBlocker
+from PyQt6.QtCore import QSignalBlocker, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -16,15 +16,22 @@ from boss_say_hello.ui.fields import mark_invalid, required_label, watch_field
 
 
 class ResumePage(QWidget):
-    def __init__(self, controller):
+    def __init__(self, controller, config_reader=None):
         super().__init__()
         self.controller = controller
+        self.config_reader = config_reader
         self.version = None
+        self.importing = False
+        self.dirty = False
+        self.auto_save_timer = QTimer(self)
+        self.auto_save_timer.setSingleShot(True)
+        self.auto_save_timer.setInterval(600)
+        self.auto_save_timer.timeout.connect(self.flush_save)
         self.setStyleSheet('QPlainTextEdit[invalid="true"] {border: 1px solid #c62828; background: #fff5f5;}')
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(required_label("PDF 简历"))
-        upload = QPushButton("导入 PDF 简历")
+        upload = self.upload_button = QPushButton("导入 PDF 简历")
         upload.clicked.connect(self.choose_file)
         row.addWidget(upload)
         self.status = QLabel("尚未导入 · 仅支持有文本的 PDF")
@@ -58,17 +65,61 @@ class ResumePage(QWidget):
         watch_field(self.summary, self.summary.textChanged)
 
     def choose_file(self):
+        try:
+            if self.config_reader is None:
+                raise ValueError("请先填写模型配置")
+            config, secret = self.config_reader()
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
         path, _ = QFileDialog.getOpenFileName(self, "选择简历", "", "PDF (*.pdf)")
         if path:
-            self.invalidate()
+            self.flush_save()
             self.confirm_button.setEnabled(False)
-            self.controller.import_resume(Path(path))
+            self.status.setText("正在导入 · 使用当前界面的模型配置")
+            self.controller.import_resume(Path(path), config, secret)
+
+    def set_importing(self, importing):
+        self.importing = importing
+        self.upload_button.setEnabled(not importing)
+        self.keywords.setEnabled(not importing)
+        self.summary.setEnabled(not importing)
+        self.confirm_button.setEnabled(not importing and self.version is not None)
+        if importing:
+            self.status.setText("正在提炼新简历 · 完成后可编辑关键词和摘要")
 
     def invalidate(self):
-        self.status.setText("未确认 · 修改完成后请确认使用")
+        self.status.setText("未确认 · 草稿自动保存，修改完成后请确认使用")
         self.controller.invalidate_resume()
+        self.dirty = True
+        self.auto_save_timer.start()
+
+    def flush_save(self):
+        self.auto_save_timer.stop()
+        if self.dirty:
+            return self.controller.save_resume_draft(
+                self.version.id if self.version else None,
+                self.keywords.toPlainText(),
+                self.summary.toPlainText(),
+            )
+
+    def restore_draft(self, draft):
+        blockers = [QSignalBlocker(self.keywords), QSignalBlocker(self.summary)]
+        self.keywords.setPlainText(draft["keywords"])
+        self.summary.setPlainText(draft["summary"])
+        self.dirty = False
+        self.auto_save_timer.stop()
+        self.status.setText("草稿已恢复 · 未确认，请核对后确认使用")
+        del blockers
+
+    def acknowledge_save(self, generation):
+        if generation == self.controller.generation:
+            self.dirty = False
+            self.status.setText("草稿已自动保存 · 未确认")
 
     def set_version(self, version):
+        self.auto_save_timer.stop()
+        self.dirty = False
         self.version = version
         blockers = [QSignalBlocker(self.keywords), QSignalBlocker(self.summary)]
         self.original.setPlainText(version.original_text)
@@ -77,7 +128,7 @@ class ResumePage(QWidget):
         self.status.setText(
             "已确认 · 新任务使用此版本" if version.confirmed else "未确认 · 请核对关键词和摘要"
         )
-        self.confirm_button.setEnabled(True)
+        self.confirm_button.setEnabled(not self.importing)
         del blockers
 
     def confirm(self):
@@ -91,6 +142,7 @@ class ResumePage(QWidget):
             if missing:
                 self.status.setText("请填写必填项：" + "、".join(missing))
                 return
+            self.auto_save_timer.stop()
             self.controller.confirm_resume(
                 self.version, tuple(self.keywords.toPlainText().splitlines()), self.summary.toPlainText()
             )
