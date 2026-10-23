@@ -42,6 +42,7 @@ FIELDS = {
     "stack",
 }
 MESSAGES = {
+    "stop.requested": "用户请求结束本轮",
     "run.tool_action": "AI 请求执行工具",
     "run.tool_result": "工具执行结果已记录",
     "run.preferences": "本轮原生筛选已核验",

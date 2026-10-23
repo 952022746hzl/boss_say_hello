@@ -18,12 +18,18 @@ class CompanyCache:
 
     def get(self, identity, max_age_days):
         row = self.data.get(self.key(identity))
-        if row and 0 <= self.clock() - row["queried_at"] <= max_age_days * 86400:
-            return row["sources"]
+        if row:
+            sources = [
+                {**source, "cached_at": source.get("cached_at", row["queried_at"])}
+                for source in row["sources"]
+                if 0 <= self.clock() - source.get("cached_at", row["queried_at"]) <= max_age_days * 86400
+            ]
+            return sources or None
         return None
 
     def put(self, identity, sources):
         if not sources:
             return
-        self.data[self.key(identity)] = {"identity": identity, "queried_at": self.clock(), "sources": sources}
+        stamped = [{**source, "cached_at": source.get("cached_at", self.clock())} for source in sources]
+        self.data[self.key(identity)] = {"identity": identity, "queried_at": self.clock(), "sources": stamped}
         write_json(self.path, self.data)

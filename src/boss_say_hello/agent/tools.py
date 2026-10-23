@@ -1,7 +1,7 @@
 from dataclasses import asdict
 
 from boss_say_hello.agent.contracts import background_decision, combined_assessment
-from boss_say_hello.agent.tool_schema import DEFINITIONS
+from boss_say_hello.agent.tool_schema import DEFINITIONS, TEXT, obj, validate_value
 from boss_say_hello.ai.schemas import parse_assessment
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure
 from boss_say_hello.domain import RunEvent
@@ -37,9 +37,7 @@ class ToolExecutor:
     async def execute(self, name, args):
         if name not in DEFINITIONS or not isinstance(args, dict):
             raise ValueError("未知工具")
-        fields = {"reason", *DEFINITIONS[name][1]}
-        if set(args) != fields or not isinstance(args.get("reason"), str) or not args["reason"].strip():
-            raise ValueError("工具参数不完整或含未知字段")
+        validate_value(args, obj({"reason": TEXT, **DEFINITIONS[name][1]}))
         await self.guard()
         jid = args.get("job_id")
         if jid is not None:
@@ -124,6 +122,10 @@ class ToolExecutor:
         return {"job": asdict(job), "check": asdict(check)}
 
     async def search_company(self, job_id, angle):
+        # Revoke before any await: failed or interrupted refresh cannot leave an old send permit.
+        self.invalidate(job_id)
+        self.sources.pop(job_id, None)
+        self.companies.pop(job_id, None)
         if angle not in {"identity", "business", "employment", "risk"}:
             raise ValueError("查询角度无效")
         company = await self.browser.company_info(self.jobs[job_id])
@@ -142,7 +144,6 @@ class ToolExecutor:
             if not sources:
                 raise ValueError("没有可引用的公司来源，保持待确认")
             self.cache.put(identity, sources)
-        self.invalidate(job_id)
         self.companies[job_id], self.sources[job_id] = company, sources
         self.publish("company_sources", job_id=job_id, company=company, sources=sources)
         return {"company": company, "sources": sources}

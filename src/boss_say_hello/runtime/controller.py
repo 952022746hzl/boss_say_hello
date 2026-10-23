@@ -178,6 +178,15 @@ class Controller(QObject):
         if self.backend and self.backend.log:
             self.backend.log.record("resume.requested")
 
+    def request_stop(self):
+        self.control.closing.set()
+        self.control.pause_requested.set()
+        if self.backend and self.backend.log:
+            self.backend.log.record("stop.requested")
+        self.event.emit(
+            RunEvent("", "notice", {"message": "已请求结束本轮；当前请求返回后保存结果，可重新打开浏览器"})
+        )
+
     def close(self):
         self.control.closing.set()
         self.control.pause_requested.set()

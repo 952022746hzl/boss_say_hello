@@ -58,3 +58,16 @@ def test_company_cache_separates_identity_and_expiry(tmp_path):
     assert cache.get({**identity, "id": "b"}, 7) is None
     now[0] += 8 * 86400
     assert cache.get(identity, 7) is None
+
+
+def test_adding_new_source_does_not_extend_old_source_lifetime(tmp_path):
+    from boss_say_hello.storage.companies import CompanyCache
+
+    now = [1000000.0]
+    cache = CompanyCache(tmp_path / "companies.json", clock=lambda: now[0])
+    identity = {"id": "company"}
+    cache.put(identity, [{"id": "old", "text": "old"}])
+    now[0] += 6 * 86400
+    cache.put(identity, cache.get(identity, 7) + [{"id": "new", "text": "new"}])
+    now[0] += 2 * 86400
+    assert [s["id"] for s in cache.get(identity, 7)] == ["new"]

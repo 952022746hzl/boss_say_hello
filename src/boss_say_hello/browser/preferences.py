@@ -107,12 +107,14 @@ SNAPSHOT = r"""/* PREFERENCES */ JSON.stringify((() => {
 })())"""
 
 
-def action_script(option_id, value=None):
+def action_script(option_id, value=None, guard_form=None):
     return (
         "/* PREFERENCE_ACTION */ JSON.stringify((() => {const id="
         + json.dumps(option_id)
         + ",value="
         + json.dumps(value, ensure_ascii=False)
+        + ",expected="
+        + json.dumps(guard_form, ensure_ascii=False)
         + r""";
       const state=window.__bossPreferenceControls;
       if(!state||!id.startsWith(state.token+':')) return {acted:false};
@@ -121,6 +123,20 @@ def action_script(option_id, value=None):
       const e=item.e;
       const label=(e.innerText||e.textContent||'').trim().slice(0,100)||e.getAttribute('placeholder')||'';
       if(label!==item.label||getComputedStyle(e).visibility==='hidden') return {acted:false};
+      if(expected!==null) {
+        const form=e.closest('.expectation-form');
+        const text=n=>(n?.innerText||n?.textContent||'').trim();
+        if(!form||!text(form).includes('添加求职期望'))return {acted:false};
+        const actual={};
+        for(const row of form.querySelectorAll('.form-item')) {
+          const field=text(row.querySelector('.item-label'));
+          if(field==='薪资要求') {
+            const selected=[...row.querySelectorAll('.ui-select-selection')].map(n=>text(n.querySelector('.ui-select-selected-value'))||text(n.querySelector('.ui-select-inner')).replace('选择薪资范围','').trim());
+            actual['薪资下限']=selected[0]||'';actual['薪资上限']=selected[1]||'';
+          } else actual[field]=row.querySelector('input[type=text]')?.value||text(row.querySelector('.radio-checked'));
+        }
+        if(Object.keys(actual).length!==Object.keys(expected).length||Object.keys(expected).some(k=>actual[k]!==expected[k])) return {acted:false};
+      }
       if(item.kind==='input') {
         if(typeof value!=='string')return {acted:false};
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,value);

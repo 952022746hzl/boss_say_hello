@@ -33,7 +33,19 @@ class DeliveryService:
         latest = await self.browser.refresh_job(job)
         if any(
             getattr(latest, k) != getattr(job, k)
-            for k in ("id", "account_id", "title", "company", "text", "city", "salary_raw", "recruiter_id")
+            for k in (
+                "id",
+                "account_id",
+                "title",
+                "company",
+                "text",
+                "city",
+                "salary_raw",
+                "recruiter_id",
+                "company_id",
+                "company_full_name",
+                "company_url",
+            )
         ):
             return event("changed", reason="岗位已变化，请在下一轮重新评估")
         if check_job(run.config, latest).status != "pass":

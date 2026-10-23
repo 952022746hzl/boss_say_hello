@@ -91,6 +91,7 @@ class NodriverAdapter:
         if len(options) != 1 or action != options[0]["kind"]:
             raise BrowserFailure("控件已变化或操作类型不匹配")
         option = options[0]
+        guard_form = None
         if action == "input" and value not in {self.goal.target_title, self.goal.cities[0]}:
             raise BrowserFailure("输入内容必须来自本轮职位或城市")
         if option.get("submit", option["label"] in {"完成", "保存"}):
@@ -103,9 +104,10 @@ class NodriverAdapter:
                 raise BrowserFailure("仅可新增一次已核实的求职期望；未知结果请先核对")
             if not expectation_form_matches(self.preference_state["form_values"], self.goal):
                 raise BrowserFailure("期望字段与配置不一致，不能保存")
+            guard_form = self.preference_state["form_values"]
             self.preference_submitted = True
         self.guard()
-        result = await self.evaluate(self.list_tab, action_script(option_id, value))
+        result = await self.evaluate(self.list_tab, action_script(option_id, value, guard_form))
         if not result.get("acted"):
             raise BrowserFailure("控件已失效，未执行操作")
         await asyncio.sleep(0.4)
@@ -118,6 +120,9 @@ class NodriverAdapter:
         return bool(
             self.goal
             and current["document"] == receipt.get("document")
+            and current.get("path") == receipt.get("path")
+            and {f["field"]: f["selected"] for f in current.get("filters", [])}
+            == {f["field"]: f["selected"] for f in receipt.get("filters", [])}
             and preferences_match(current, self.goal)
         )
 

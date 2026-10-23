@@ -35,7 +35,9 @@ class RunPage(QWidget):
         self.pause_button.clicked.connect(controller.request_pause)
         self.resume_button = QPushButton("继续本轮")
         self.resume_button.clicked.connect(controller.request_resume)
-        for b in (self.start_button, self.pause_button, self.resume_button):
+        self.stop_button = QPushButton("结束本轮")
+        self.stop_button.clicked.connect(lambda: controller.request_stop())
+        for b in (self.start_button, self.pause_button, self.resume_button, self.stop_button):
             buttons.addWidget(b)
         layout.addLayout(buttons)
         self.status = QLabel("先登录 → 导入并确认简历 → 配置模型和规则 → 开始预览")

@@ -61,6 +61,16 @@ async def test_current_recommendation_dom(tmp_path):
         assert not json.loads(await page.evaluate(action_script(control["id"])))["acted"]
         assert current["filters"][0]["selected"] == ["20-50K"]
         assert any(c["label"] == "添加求职期望" for c in current["controls"])
+        await page.evaluate(
+            """document.body.insertAdjacentHTML('beforeend', `<div class="expectation-form"><h3>添加求职期望</h3><div class="form-item"><span class="item-label">期望职位</span><input type="text" value="Java"></div><button onclick="window.saved=true">完成</button></div>`)"""
+        )
+        observed = json.loads(await page.evaluate(SNAPSHOT))
+        save = next(c for c in observed["controls"] if c["label"] == "完成")
+        await page.evaluate("document.querySelector('.expectation-form input').value='Other'")
+        result = json.loads(
+            await page.evaluate(action_script(save["id"], guard_form=observed["form_values"]))
+        )
+        assert not result["acted"] and not await page.evaluate("!!window.saved")
     finally:
         from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 
