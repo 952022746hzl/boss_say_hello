@@ -1,4 +1,9 @@
+import json
+
 LABELS = {
+    "agent_finished": "AI 已结束本轮（详见步骤理由）",
+    "budget_reached": "已达到决策预算",
+    "excluded": "外包嫌疑已排除",
     "preview": "预览草稿",
     "sent": "已发送",
     "unknown": "结果待核实",
@@ -35,6 +40,28 @@ def details(events):
                 lines.append(label + "：" + "；".join(p.get(key, [])))
         elif e.kind == "greeting":
             lines.append("招呼语：" + p["text"])
+        elif e.kind == "tool_action":
+            lines.append(f"行动 {p['tool']}：{p['reason']}")
+        elif e.kind == "tool_result":
+            lines.append(f"结果 {p['tool']}：" + json.dumps(p["result"], ensure_ascii=False)[:3000])
+        elif e.kind == "company_sources":
+            lines.append("公司主体：" + p["company"].get("name", "待核实"))
+            for source in p["sources"]:
+                lines.extend(
+                    [
+                        f"来源 {source['id']} · {source.get('title', '')} · {source.get('queried_at', '')}",
+                        source["url"],
+                        source["text"],
+                    ]
+                )
+        elif e.kind == "background":
+            lines.extend(
+                [
+                    f"公司背景分：{p['score']} · {LABELS.get(p['status'], p['status'])}",
+                    p["reason"],
+                    "来源：" + "、".join(p["source_ids"]),
+                ]
+            )
         else:
             if "status" in p:
                 lines.append(LABELS.get(p["status"], p["status"]))

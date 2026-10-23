@@ -5,17 +5,20 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from boss_say_hello.agent.contracts import validate_agent_goal
+from boss_say_hello.agent.engine import AgentEngine
+from boss_say_hello.agent.search import CompanySearch
+from boss_say_hello.agent.tools import ToolExecutor
+from boss_say_hello.ai.agent_client import AgentClient
 from boss_say_hello.ai.client import AiService
 from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 from boss_say_hello.delivery.journal import DeliveryJournal
 from boss_say_hello.delivery.service import DeliveryService
 from boss_say_hello.diagnostics import EventLog
 from boss_say_hello.domain import RunEvent, RunSnapshot
-from boss_say_hello.greetings.service import GreetingService
-from boss_say_hello.matching.service import MatchingService
 from boss_say_hello.resume.service import ResumeService
 from boss_say_hello.runs.control import Clock
-from boss_say_hello.runs.engine import RunEngine
+from boss_say_hello.storage.companies import CompanyCache
 from boss_say_hello.storage.credentials import (
     CredentialStore,
     CredentialUnavailable,
@@ -201,11 +204,12 @@ class Backend:
     async def run(self, config, resume, control):
         if self.busy:
             raise ValueError("已有运行中的任务")
-        config.validate(ready=True)
+        validate_agent_goal(config)
         if not resume.confirmed:
             raise ValueError("请先确认简历")
         self.busy = True
         ai = None
+        search = None
         try:
             session = await self.browser.session()
             if not session.logged_in or not session.account_id:
@@ -222,24 +226,31 @@ class Backend:
                 }:
                     raise ValueError("选定平台附件不可用，请重新检查登录状态和附件")
             # Hold this client's key and configuration until this run ends.
-            ai = AiService(config, await self.secret(config))
+            key = await self.secret(config)
+            ai = AgentClient(config, key)
+            search = CompanySearch(config, key)
             run = RunSnapshot(
                 uuid4().hex, session.account_id, config, resume, datetime.now(timezone.utc).isoformat()
             )
-            engine = RunEngine(
-                self.store,
+            executor = ToolExecutor(
+                run,
                 self.browser,
-                MatchingService(ai),
-                GreetingService(ai),
+                ai,
+                search,
+                CompanyCache(self.root / "history" / "companies.json"),
+                self.store,
                 DeliveryService(self.browser, self.journal),
                 self.journal,
+                control,
                 Clock(),
                 self.emit_event,
             )
-            await engine.run(run, control)
+            await AgentEngine(executor, ai).run()
         finally:
             if ai:
                 await ai.close()
+            if search:
+                await search.close()
             self.busy = False
 
     async def close(self):

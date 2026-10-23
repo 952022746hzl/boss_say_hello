@@ -52,7 +52,19 @@ class AgentEngine:
         try:
             for step in range(run.config.max_agent_steps):
                 if control.pause_requested.is_set():
-                    ex.publish("state", status="paused", reason="任务暂停，请核对状态后继续")
+                    required = getattr(control, "default_message_required", None)
+                    acknowledged = getattr(control, "default_message_acknowledged", None)
+                    needs_ack = bool(
+                        required and required.is_set() and acknowledged and not acknowledged.is_set()
+                    )
+                    ex.publish(
+                        "state",
+                        status="paused",
+                        requires_default_ack=needs_ack,
+                        reason="平台首次联系会先发送默认招呼语，请阅读后点击继续本轮"
+                        if needs_ack
+                        else "任务暂停，请核对状态后继续",
+                    )
                 if not await wait_until_ready(control, ex.clock, ex.deadline):
                     status = "stopped"
                     break

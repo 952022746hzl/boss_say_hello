@@ -15,6 +15,8 @@ async def test_current_recommendation_dom(tmp_path):
     import nodriver
 
     html = """<!doctype html><meta charset="utf-8"><div id="wrap">
+    <div class="c-expect-select"><div class="expect-item" onclick="this.classList.add('active')">Java(深圳)</div><div class="add-expect-btn">添加求职期望</div><button style="display:none">隐藏项</button></div>
+    <div class="c-filter-condition"><div class="city-label"><span class="cur-city-label">深圳</span></div><div class="condition-filter-select"><ul><li ka="sel-job-rec-salary-406" class="selected">20-50K</li></ul></div></div>
     <div class="user-nav"><a ka="header-username">synthetic user</a></div>
     <div class="job-card-box"><a class="job-name" href="https://www.zhipin.com/job_detail/synthetic.html">Python</a><span class="job-salary">20-30K</span><span class="boss-name">合成公司</span><span class="company-location">北京</span></div>
     <div class="job-detail-box"><div class="job-detail-header"><span class="job-name">Python</span><a class="op-btn-chat">立即沟通</a></div><div class="job-detail-body">Python 接口开发</div></div></div>
@@ -47,6 +49,18 @@ async def test_current_recommendation_dom(tmp_path):
         detail = await adapter.read_detail("https://www.zhipin.com/job_detail/synthetic.html")
         assert detail["recruiter_id"] == "synthetic-hr"
         assert await page.evaluate("window.contactClicks") == 0
+        from boss_say_hello.browser.preferences import SNAPSHOT, action_script
+
+        state = json.loads(await page.evaluate(SNAPSHOT))
+        labels = [c["label"] for c in state["controls"]]
+        assert "立即沟通" not in labels and "隐藏项" not in labels
+        control = next(c for c in state["controls"] if c["label"] == "Java(深圳)")
+        assert json.loads(await page.evaluate(action_script(control["id"])))["acted"]
+        current = json.loads(await page.evaluate(SNAPSHOT))
+        assert current["expectations"][0]["selected"]
+        assert not json.loads(await page.evaluate(action_script(control["id"])))["acted"]
+        assert current["filters"][0]["selected"] == ["20-50K"]
+        assert any(c["label"] == "添加求职期望" for c in current["controls"])
     finally:
         from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 

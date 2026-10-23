@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
         heading = QLabel("BOSS 求职助手")
         heading.setStyleSheet("font-size: 24px; font-weight: 600; color: #103f46;")
         layout.addWidget(heading)
-        layout.addWidget(QLabel("推荐岗位 → 简历匹配 → AI 招呼语 · 每次启动默认预览"))
+        layout.addWidget(QLabel("AI 自主筛选 · 公司背景核查 · 简历匹配与招呼语 · 每次启动默认预览"))
         self.login = LoginPanel(controller)
         layout.addWidget(self.login)
         self.settings = SettingsPage(controller)
@@ -57,7 +57,12 @@ class MainWindow(QMainWindow):
             raise
 
     def run_config(self):
-        config = self.settings.read_config(ready=True)
+        try:
+            config = self.settings.read_run_config()
+        except ValueError as exc:
+            self.tabs.setCurrentWidget(self.settings)
+            self.settings.status.setText(str(exc))
+            raise
         if self.settings.secret.text():
             if not self.settings.use_key():
                 raise ValueError(self.settings.status.text())

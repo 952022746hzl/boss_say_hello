@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from boss_say_hello.domain import AppConfig, PromptSet
 from boss_say_hello.storage.credentials import credential_scope
+from boss_say_hello.ui.agent_settings import AgentSettings
 from boss_say_hello.ui.fields import mark_invalid, required_label, visibility_icon, watch_field
 
 
@@ -57,19 +58,19 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(body)
         form = QFormLayout()
         self.cities = QLineEdit()
-        self.cities.setPlaceholderText("北京, 上海；留空不限城市")
+        self.cities.setPlaceholderText("每轮一个城市，如 深圳")
         self.salary_min = QLineEdit()
         self.salary_max = QLineEdit()
         self.salary_min.setPlaceholderText("税前月薪下限，元")
-        self.salary_max.setPlaceholderText("上限；可留空")
+        self.salary_max.setPlaceholderText("税前月薪上限，元")
         salary = QWidget()
         row = QHBoxLayout(salary)
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.salary_min)
         row.addWidget(QLabel("至"))
         row.addWidget(self.salary_max)
-        form.addRow("城市（可选）", self.cities)
-        form.addRow("薪资区间（可选）", salary)
+        form.addRow(required_label("城市（开始本轮必填）"), self.cities)
+        form.addRow(required_label("薪资区间（开始本轮必填）"), salary)
         self.base_url = QLineEdit()
         self.base_url.setPlaceholderText("https://服务地址/v1")
         self.model = QLineEdit()
@@ -112,6 +113,9 @@ class SettingsPage(QWidget):
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self.agent = AgentSettings()
+        layout.addWidget(self.agent)
+        self.agent.changed.connect(self.schedule_save)
         tabs = self.prompt_tabs = QTabWidget()
         self.prompts = []
         for name in ["求职偏好", "评分标准", "招呼语风格"]:
@@ -226,6 +230,7 @@ class SettingsPage(QWidget):
         self.loading = True
         self.auto_save_timer.stop()
         self.config = config
+        self.agent.load(config)
         self.cities.setText(", ".join(config.cities))
         self.salary_min.setText("" if config.salary_min is None else str(config.salary_min))
         self.salary_max.setText("" if config.salary_max is None else str(config.salary_max))
@@ -292,8 +297,25 @@ class SettingsPage(QWidget):
             auto_send=self.auto_send.isChecked(),
             send_attachment=self.send_attachment.isChecked(),
             attachment_id=self.attachment.currentData(),
+            **self.agent.values(),
         )
         result.validate(ready=ready)
+        return result
+
+    def read_run_config(self):
+        from boss_say_hello.agent.contracts import validate_agent_goal
+        from boss_say_hello.browser.preferences import required_filters
+
+        result = self.read_config(ready=True)
+        for field, invalid in (
+            (self.agent.target_title, not result.target_title),
+            (self.cities, len(result.cities) != 1),
+            (self.salary_min, result.salary_min is None),
+            (self.salary_max, result.salary_max is None),
+        ):
+            mark_invalid(field, invalid)
+        validate_agent_goal(result)
+        required_filters(result)
         return result
 
     def save(self):

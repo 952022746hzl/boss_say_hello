@@ -41,6 +41,12 @@ class RunPage(QWidget):
         self.status = QLabel("先登录 → 导入并确认简历 → 配置模型和规则 → 开始预览")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.steps = QPlainTextEdit()
+        self.steps.setReadOnly(True)
+        self.steps.setPlaceholderText("这里显示 AI 每一步的行动、简短理由和执行结果")
+        self.steps.setMaximumHeight(160)
+        self.steps.document().setMaximumBlockCount(1500)
+        layout.addWidget(self.steps)
         split = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["公司", "岗位", "城市", "薪资", "匹配分", "状态"])
@@ -81,6 +87,7 @@ class RunPage(QWidget):
             self.events.clear()
             self.table.setRowCount(0)
             self.details.clear()
+            self.steps.clear()
             self.status.setText("自动发送运行中" if p["mode"] == "auto" else "预览运行中 · 不发送消息")
         elif event.run_id != self.run_id:
             return
@@ -92,6 +99,8 @@ class RunPage(QWidget):
             self.status.setText(f"{LABELS.get(p['status'], p['status'])} · 本轮联系/未知占额 {p['contacts']}")
         if event.kind == "error":
             self.status.setText(p["reason"])
+        if event.kind in {"tool_action", "tool_result"}:
+            self.steps.appendPlainText(details([event]).strip())
         id = p.get("job_id")
         if id is None:
             return

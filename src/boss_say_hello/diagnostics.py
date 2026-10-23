@@ -13,6 +13,9 @@ from pathlib import Path
 
 _current = contextvars.ContextVar("boss_diagnostics", default=None)
 FIELDS = {
+    "tool",
+    "step",
+    "message_count",
     "run_id",
     "job_id",
     "attempt_id",
@@ -39,6 +42,16 @@ FIELDS = {
     "stack",
 }
 MESSAGES = {
+    "run.tool_action": "AI 请求执行工具",
+    "run.tool_result": "工具执行结果已记录",
+    "run.preferences": "本轮原生筛选已核验",
+    "run.company_sources": "公司查询来源已保存",
+    "run.background": "公司背景结论已生成",
+    "company.search.started": "公司联网查询开始",
+    "company.search.succeeded": "公司联网查询完成",
+    "company.search.failed": "公司联网查询失败",
+    "agent.tool.failed": "代理工具执行失败",
+    "agent.run.failed": "代理运行中断",
     "browser.closed": "浏览器已退出，已暂停任务；点击打开 BOSS 登录可重新启动",
     "app.ready": "后台服务已就绪",
     "app.closed": "后台服务已关闭",
@@ -162,7 +175,7 @@ class EventLog:
     def event(self, event):
         p = event.payload
         fields = {"run_id": event.run_id}
-        for key in ("job_id", "status", "score", "mode"):
+        for key in ("job_id", "status", "score", "mode", "tool"):
             if key in p:
                 fields[key] = p[key]
         if event.kind == "session":

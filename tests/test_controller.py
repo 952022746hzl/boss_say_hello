@@ -53,7 +53,21 @@ async def test_secret_is_fixed_for_run(tmp_path, config, resume, monkeypatch):
         b.secrets[scope] = "second"
         return Mock(close=AsyncMock())
 
-    monkeypatch.setattr("boss_say_hello.runtime.backend.AiService", ai_factory)
-    await b.run(config(), resume(), RunControl())
+    monkeypatch.setattr("boss_say_hello.runtime.backend.AgentClient", ai_factory)
+    search_keys = []
+
+    def search_factory(config, secret):
+        search_keys.append(secret)
+        return Mock(close=AsyncMock())
+
+    monkeypatch.setattr("boss_say_hello.runtime.backend.CompanySearch", search_factory)
+    monkeypatch.setattr("boss_say_hello.runtime.backend.ToolExecutor", Mock())
+    monkeypatch.setattr("boss_say_hello.runtime.backend.AgentEngine", lambda *args: Mock(run=AsyncMock()))
+    await b.run(
+        config(target_title="Java", cities=("深圳",), salary_min=20000, salary_max=30000),
+        resume(),
+        RunControl(),
+    )
     assert created == ["first"] and b.secrets[scope] == "second"
+    assert search_keys == ["first"]
     await b.close()

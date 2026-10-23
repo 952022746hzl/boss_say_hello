@@ -127,6 +127,8 @@ class RecordStore:
             encounters = {}
             for event in self.events(run.id):
                 payload = event.payload
+                if event.kind in ("tool_action", "tool_result", "preferences"):
+                    metadata.setdefault("steps", []).append({"kind": event.kind, **payload})
                 if event.kind == "finished":
                     metadata["status"] = payload["status"]
                 job_id = payload.get("job_id")
@@ -156,7 +158,17 @@ class RecordStore:
                     row["browsed"] = True
                     row["job"] = payload["job"]
                     row["skip_auto_contact"] |= payload["job"].get("contact_status") == "contacted"
-                elif event.kind in ("assessment", "check", "greeting", "delivery", "error"):
+                elif event.kind in ("tool_action", "tool_result"):
+                    encounter.setdefault("steps", []).append({"kind": event.kind, **payload})
+                elif event.kind in (
+                    "assessment",
+                    "check",
+                    "greeting",
+                    "delivery",
+                    "error",
+                    "background",
+                    "company_sources",
+                ):
                     encounter[event.kind] = {k: v for k, v in payload.items() if k != "job_id"}
         # Confirmed sends and deduplication are derived from the durable journal, never from drafts.
         for contact in self.db.execute("SELECT * FROM contacts WHERE cancelled=0"):

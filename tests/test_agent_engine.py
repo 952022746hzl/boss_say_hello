@@ -245,3 +245,22 @@ async def test_loop_budget_ends_without_any_contact(config, snapshot, job, stora
     await AgentEngine(executor, ai).run()
     assert storage.events(executor.run.id)[-1].payload["status"] == "budget_reached"
     delivery.deliver.assert_not_called()
+
+
+async def test_default_greeting_warning_allows_visible_resume(config, snapshot, job, storage, tmp_path):
+    import asyncio
+
+    from boss_say_hello.agent.engine import AgentEngine
+
+    ex, *_ = environment(config, snapshot, job, storage, tmp_path)
+    ex.control.default_message_required = Event()
+    ex.control.default_message_acknowledged = Event()
+    ex.control.default_message_required.set()
+    ex.control.pause_requested.set()
+    task = asyncio.create_task(AgentEngine(ex, SimpleNamespace()).run())
+    try:
+        await asyncio.sleep(0.02)
+        assert any(e.kind == "state" and e.payload.get("requires_default_ack") for e in storage.events("r1"))
+    finally:
+        ex.control.closing.set()
+        await task

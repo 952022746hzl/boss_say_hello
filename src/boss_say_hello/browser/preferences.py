@@ -71,7 +71,7 @@ SNAPSHOT = r"""/* PREFERENCES */ JSON.stringify((() => {
  }
  const token=String(performance.timeOrigin)+':'+String(Math.random());
  const controls=[]; const nodes=[]; const seen=new Set();
- for(const scope of scopes) for(const e of scope.querySelectorAll('a,button,input:not([type=hidden]),li,.city-label,.current-select,.ui-select-selection,.ui-cascader-selection')) {
+ for(const scope of scopes) for(const e of scope.querySelectorAll('a,button,input:not([type=hidden]),li,.expect-item,.add-expect-btn,.city-label,.current-select,.ui-select-selection,.ui-cascader-selection')) {
    if(seen.has(e)||!visible(e)||e.disabled) continue;
    seen.add(e);
    const label=text(e).slice(0,100)||e.getAttribute('placeholder')||'';
