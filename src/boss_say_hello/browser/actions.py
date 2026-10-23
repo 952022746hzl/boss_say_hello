@@ -1,10 +1,16 @@
 """Conservative DOM actions. Missing identity/evidence never authorizes a click."""
+
 import json
 
 
-def script(action, job, value=''):
-    args = json.dumps({'action': action, 'job': job.id, 'boss': job.recruiter_id, 'value': value}, ensure_ascii=True)
-    return '/* ACTION */ JSON.stringify((() => { const a = ' + args + r''';
+def script(action, job, value=""):
+    args = json.dumps(
+        {"action": action, "job": job.id, "boss": job.recruiter_id, "value": value}, ensure_ascii=True
+    )
+    return (
+        "/* ACTION */ JSON.stringify((() => { const a = "
+        + args
+        + r""";
       const visible=e=>e && e.getClientRects().length>0;
       const unique=sel=>{const es=[...document.querySelectorAll(sel)].filter(visible);return es.length===1?es[0]:null;};
       const chat=unique('.chat-conversation, .chat-container');
@@ -16,9 +22,10 @@ def script(action, job, value=''):
       if(a.action==='observe') return {matched,count};
       if(a.action==='observe_attachment') return {matched,count};
       if(a.action==='contact') {
-        const id=location.pathname.match(/^\/job_detail\/([A-Za-z0-9_-]+)\.html$/)?.[1];
+        const data=document.querySelector('.job-detail-box')?.__vue__?.$props?.data?.jobInfo;
+        const id=data?.encryptId;
         const b=unique('.op-btn-chat');
-        if(id!==a.job || !b || b.innerText.trim()!=='立即沟通') return {clicked:false};
+        if(id!==a.job || data?.encryptUserId!==a.boss || !b || b.innerText.trim()!=='立即沟通') return {clicked:false};
         b.click(); return {clicked:true};
       }
       if(!matched) return {clicked:false};
@@ -41,4 +48,5 @@ def script(action, job, value=''):
         send.click(); return {clicked:true};
       }
       return {clicked:false};
-    })())'''
+    })())"""
+    )

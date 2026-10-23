@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from typing import Protocol, AsyncIterator
 from pathlib import Path
+from typing import AsyncIterator, Protocol
+
 from boss_say_hello.domain import Job
 
 

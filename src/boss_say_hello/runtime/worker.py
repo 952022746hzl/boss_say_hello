@@ -1,5 +1,6 @@
 import asyncio
 import threading
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
@@ -27,7 +28,7 @@ class WorkerThread(QThread):
     def submit(self, coro):
         if not self.ready.wait(3) or self._stopping:
             coro.close()
-            raise RuntimeError('后台服务尚未就绪或正在关闭')
+            raise RuntimeError("后台服务尚未就绪或正在关闭")
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     async def _shutdown(self):

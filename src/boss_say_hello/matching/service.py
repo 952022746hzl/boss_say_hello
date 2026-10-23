@@ -7,8 +7,8 @@ class MatchingService:
 
     async def evaluate(self, run, job):
         if not run.resume.confirmed:
-            raise ValueError('简历尚未确认')
+            raise ValueError("简历尚未确认")
         check = check_job(run.config, job)
-        if check.status != 'pass':
+        if check.status != "pass":
             return check, None
         return check, await self.ai.assess(run, job)
