@@ -3,7 +3,8 @@ import json
 import re
 from urllib.parse import urlparse
 from boss_say_hello.browser import selectors as dom
-from boss_say_hello.browser.port import SessionInfo, BrowserCapabilities, AttachmentInfo, BrowserFailure
+from boss_say_hello.browser.port import SessionInfo, BrowserCapabilities, AttachmentInfo, BrowserFailure, ActionResult, ActionBlocked
+from boss_say_hello.browser.actions import script
 from boss_say_hello.domain import Job
 
 
@@ -34,6 +35,57 @@ class NodriverAdapter:
         self.list_tab = None
         self.detail_tab = None
         self.active_job = None
+        self.control = None
+
+    def bind_control(self, control):
+        self.control = control
+
+    def guard(self):
+        if self.control is None or self.control.pause_requested.is_set() or self.control.closing.is_set():
+            raise ActionBlocked('任务暂停或未绑定运行控制')
+
+    async def refresh_job(self, job):
+        session = await self.session()
+        raw = await self.read_detail(job.url)
+        return parse_job(session.account_id, {'url':job.url}, raw)
+
+    async def _action(self, job, action, value=''):
+        self.guard()
+        session = await self.session()
+        if not session.logged_in or session.account_id != job.account_id:
+            return ActionResult('failed', '当前账号不匹配，未执行')
+        observe = 'observe_attachment' if action == 'attachment' else 'observe'
+        before = {'count': 0}
+        if action != 'contact':
+            before = await self.evaluate(self.detail_tab, script(observe, job, value))
+            if not before.get('matched'):
+                return ActionResult('failed', '无法核实目标会话，未执行')
+        self.guard()
+        clicked = await self.evaluate(self.detail_tab, script(action, job, value))
+        if not clicked.get('clicked'):
+            return ActionResult('failed', '页面控件或目标身份无法核实，未执行')
+        for index in range(self.poll_attempts):
+            evidence = await self.evaluate(self.detail_tab, script(observe, job, value))
+            if evidence.get('matched') and (action == 'contact' or evidence.get('count', 0) > before.get('count', 0)):
+                return ActionResult('succeeded', '已核实目标会话' if action == 'contact' else '已观察到新增的己方消息')
+            if index + 1 < self.poll_attempts:
+                await asyncio.sleep(.5)
+        return ActionResult('unknown', '已操作，但送达证据不足；不会自动重试')
+
+    async def open_contact(self, job):
+        return await self._action(job, 'contact')
+
+    async def send_text(self, job, text):
+        return await self._action(job, 'message', text)
+
+    async def send_attachment(self, job, attachment_id):
+        return await self._action(job, 'attachment', attachment_id)
+
+    async def return_to_list(self):
+        if self.list_tab is None:
+            return False
+        await self.list_tab.activate()
+        return True
 
     async def evaluate(self, tab, script):
         if tab is None:
