@@ -13,6 +13,7 @@ def main() -> int:
     controller = Controller(worker)
     window = MainWindow(controller)
     window.show()
+    controller.load_settings()
     try:
         return app.exec()
     finally:
