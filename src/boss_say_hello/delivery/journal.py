@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from boss_say_hello.browser.port import ActionResult
+from boss_say_hello.diagnostics import record
 
 
 class DeliveryJournal:
@@ -31,6 +32,7 @@ class DeliveryJournal:
                 "INSERT INTO contacts(id,run_id,account_id,job_id) VALUES (?,?,?,?)",
                 (id, run.id, run.account_id, job.id),
             )
+            record("delivery.reserved", run_id=run.id, job_id=job.id, attempt_id=id)
             return id
 
     def begin_stage(self, attempt_id, stage):
@@ -38,6 +40,7 @@ class DeliveryJournal:
             self.db.execute(
                 "INSERT INTO delivery_attempts VALUES (?,?,?,?)", (attempt_id, stage, "intent", "")
             )
+        record("delivery.intent", attempt_id=attempt_id, stage=stage, status="intent")
 
     def finish_stage(self, attempt_id, stage, result: ActionResult):
         with self.db:
@@ -45,6 +48,13 @@ class DeliveryJournal:
                 "UPDATE delivery_attempts SET outcome=?,detail=? WHERE contact_id=? AND stage=?",
                 (result.outcome, result.detail, attempt_id, stage),
             )
+        record(
+            "delivery.result",
+            attempt_id=attempt_id,
+            stage=stage,
+            status=result.outcome,
+            level="WARNING" if result.outcome in ("unknown", "failed") else "INFO",
+        )
 
     def cancel_before_contact(self, attempt_id):
         with self.db:

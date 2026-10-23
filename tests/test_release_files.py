@@ -38,3 +38,11 @@ def test_archive_wrapper_cannot_hide_private_files():
         "boss_say_hello-0.1.0/docs/spec.md",
         "boss_say_hello-0.1.0/data/key.json",
     ]
+
+
+def test_rotated_diagnostic_logs_are_private():
+    assert checker()(["application.log", "application.log.1", "logs/application.log.5"]) == [
+        "application.log",
+        "application.log.1",
+        "logs/application.log.5",
+    ]

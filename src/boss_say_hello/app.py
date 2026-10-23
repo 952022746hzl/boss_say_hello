@@ -1,4 +1,5 @@
 import sys
+import threading
 
 from PyQt6.QtWidgets import QApplication
 
@@ -13,6 +14,10 @@ def main() -> int:
     worker = WorkerThread()
     worker.start()
     controller = Controller(worker)
+    original_hook = sys.excepthook
+    original_thread_hook = threading.excepthook
+    sys.excepthook = lambda typ, exc, tb: controller.unhandled(exc)
+    threading.excepthook = lambda args: controller.unhandled(args.exc_value)
     window = MainWindow(controller)
     window.show()
     controller.load_settings()
@@ -21,3 +26,5 @@ def main() -> int:
     finally:
         controller.close()
         worker.wait()
+        sys.excepthook = original_hook
+        threading.excepthook = original_thread_hook

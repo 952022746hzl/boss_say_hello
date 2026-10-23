@@ -61,10 +61,56 @@ class RecordStore:
         ]
 
     def events(self, run_id: str) -> list[RunEvent]:
-        return [
+        events = [
             RunEvent(run_id, row["kind"], json.loads(row["data"]))
             for row in self.db.execute("SELECT * FROM run_events WHERE run_id=? ORDER BY seq", (run_id,))
         ]
+        # The journal is authoritative even if the process stopped before the
+        # corresponding UI/event notification was persisted.
+        run_row = self.db.execute("SELECT data FROM runs WHERE id=?", (run_id,)).fetchone()
+        attachment = bool(run_row and json.loads(run_row[0])["config"]["send_attachment"])
+        expected = ["contact", "message"] + (["attachment"] if attachment else [])
+        for contact in self.db.execute(
+            "SELECT id,job_id FROM contacts WHERE run_id=? AND cancelled=0", (run_id,)
+        ):
+            stages = {
+                row["stage"]: {"outcome": row["outcome"], "detail": row["detail"]}
+                for row in self.db.execute(
+                    "SELECT * FROM delivery_attempts WHERE contact_id=?", (contact["id"],)
+                )
+            }
+            for stage in expected:
+                stages.setdefault(stage, {"outcome": "not_started", "detail": "未执行"})
+            outcomes = {v["outcome"] for v in stages.values()}
+            status = (
+                "unknown"
+                if outcomes & {"unknown", "intent"}
+                else "failed"
+                if "failed" in outcomes
+                else "sent"
+                if outcomes == {"succeeded"}
+                else "interrupted"
+            )
+            if not any(
+                e.kind == "delivery"
+                and e.payload.get("job_id") == contact["job_id"]
+                and e.payload.get("stages") == stages
+                for e in events
+            ):
+                events.append(
+                    RunEvent(
+                        run_id,
+                        "delivery",
+                        {
+                            "job_id": contact["job_id"],
+                            "status": status,
+                            "stages": stages,
+                            "reason": "持久化发送记录（包含中断前已完成的步骤）",
+                            "occupies_slot": True,
+                        },
+                    )
+                )
+        return events
 
     def close(self) -> None:
         self.db.close()

@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from boss_say_hello.ai.schemas import AiFailure
@@ -20,9 +23,12 @@ class Controller(QObject):
         self.resume_ready = False
         self.generation = 0
         self.run_pending = False
+        self.default_warning_visible = False
         worker.event.connect(self.receive)
 
     def receive(self, event):
+        if event.kind == "state" and event.payload.get("requires_default_ack"):
+            self.default_warning_visible = True
         if event.kind == "resume":
             if event.payload["generation"] != self.generation:
                 return
@@ -34,17 +40,34 @@ class Controller(QObject):
 
     def submit(self, method, *args):
         async def call():
+            started = time.monotonic()
             try:
                 if self.backend is None:
                     self.backend = Backend(self.worker.event.emit)
                     self.worker.cleanups.append(self.backend.close)
                 await self.backend.initialize()
-                await getattr(self.backend, method)(*args)
+                with self.backend.log.bind():
+                    self.backend.log.record("operation.started", operation=method)
+                    await getattr(self.backend, method)(*args)
+                    self.backend.log.record(
+                        "operation.succeeded",
+                        operation=method,
+                        duration_ms=round((time.monotonic() - started) * 1000),
+                    )
             except (ValueError, CredentialUnavailable, BrowserFailure) as exc:
+                self.log_failure("operation.failed", exc, operation=method)
                 self.worker.event.emit(RunEvent("", "ui_error", {"message": str(exc)}))
             except AiFailure as exc:
-                self.worker.event.emit(RunEvent("", "ui_error", {"message": exc.public_message}))
-            except Exception:
+                self.log_failure("operation.failed", exc, operation=method, code=exc.code)
+                self.worker.event.emit(
+                    RunEvent("", "ui_error", {"message": exc.public_message, "code": exc.code})
+                )
+            except asyncio.CancelledError:
+                if self.backend and self.backend.log:
+                    self.backend.log.record("operation.cancelled", operation=method)
+                raise
+            except Exception as exc:
+                self.log_failure("operation.failed", exc, operation=method)
                 self.worker.event.emit(
                     RunEvent(
                         "",
@@ -57,6 +80,17 @@ class Controller(QObject):
                     self.worker.event.emit(RunEvent("", "run_idle", {}))
 
         return self.worker.submit(call())
+
+    def log_failure(self, event, exc, **fields):
+        if self.backend and self.backend.log:
+            self.backend.log.failure(event, exc, **fields)
+
+    def unhandled(self, exc):
+        self.control.pause_requested.set()
+        self.log_failure("app.unhandled", exc)
+        self.event.emit(
+            RunEvent("", "ui_error", {"message": "程序发生异常，请查看运行日志中的错误位置；敏感内容未记录"})
+        )
 
     def load_settings(self):
         return self.submit("load_settings")
@@ -103,17 +137,29 @@ class Controller(QObject):
         config.validate(ready=True)
         self.control = RunControl()
         self.run_pending = True
+        self.default_warning_visible = False
         self.event.emit(RunEvent("", "run_pending", {}))
         return self.submit("run", config, self.current_resume, self.control)
 
     def request_pause(self):
         self.control.pause_requested.set()
+        if self.backend and self.backend.log:
+            self.backend.log.record("pause.requested")
         self.event.emit(
             RunEvent("", "notice", {"message": "已请求暂停；当前已发起的操作会先记录结果，后续步骤停止"})
         )
 
     def request_resume(self):
+        if (
+            self.control.default_message_required.is_set()
+            and not self.control.default_message_acknowledged.is_set()
+        ):
+            if not self.default_warning_visible:
+                return
+            self.control.default_message_acknowledged.set()
         self.control.pause_requested.clear()
+        if self.backend and self.backend.log:
+            self.backend.log.record("resume.requested")
 
     def close(self):
         self.control.closing.set()

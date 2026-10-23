@@ -1,7 +1,9 @@
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
+from boss_say_hello.ui.fields import mark_invalid
 from boss_say_hello.ui.history_page import HistoryPage
+from boss_say_hello.ui.log_page import LogPage
 from boss_say_hello.ui.login_panel import LoginPanel
 from boss_say_hello.ui.resume_page import ResumePage
 from boss_say_hello.ui.run_page import RunPage
@@ -26,12 +28,14 @@ class MainWindow(QMainWindow):
         self.resume = ResumePage(controller)
         self.run = RunPage(controller, self.run_config)
         self.history = HistoryPage(controller)
+        self.logs = LogPage()
         self.tabs = QTabWidget()
         for page, name in [
             (self.settings, "1 · 配置与提示词"),
             (self.resume, "2 · 简历确认"),
             (self.run, "3 · 岗位与运行"),
             (self.history, "4 · 本地历史"),
+            (self.logs, "5 · 运行日志"),
         ]:
             self.tabs.addTab(page, name)
         layout.addWidget(self.tabs)
@@ -43,14 +47,18 @@ class MainWindow(QMainWindow):
         controller.event.connect(self.on_event)
 
     def run_config(self):
-        config = self.settings.read_config()
+        config = self.settings.read_config(ready=True)
         if self.settings.secret.text():
             self.settings.use_key()
         return config
 
     def on_event(self, event):
         p = event.payload
-        if event.kind == "settings":
+        if event.kind == "log":
+            self.logs.add_entry(p["entry"])
+        elif event.kind == "logs_ready":
+            self.logs.set_location(p["path"], p["entries"])
+        elif event.kind == "settings":
             self.settings.set_config(p["config"])
         elif event.kind == "resume":
             self.resume.set_version(p["version"])
@@ -68,6 +76,8 @@ class MainWindow(QMainWindow):
         elif event.kind in ("notice", "ui_error"):
             self.statusBar().showMessage(p["message"])
             self.settings.status.setText(p["message"])
+            if p.get("code") == "missing_key":
+                mark_invalid(self.settings.secret, True)
         elif event.kind == "run_pending":
             self.run.active = True
             self.run.set_ready(self.run.ready)

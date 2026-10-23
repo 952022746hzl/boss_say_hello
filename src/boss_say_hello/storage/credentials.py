@@ -1,4 +1,16 @@
+import hashlib
+from urllib.parse import urlsplit, urlunsplit
+
 import keyring
+
+
+def credential_scope(config):
+    config.validate()
+    if not config.base_url:
+        raise ValueError("请先填写 API 地址，再保存或使用对应密钥")
+    parts = urlsplit(config.base_url)
+    endpoint = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+    return config.credential_id + ":" + hashlib.sha256(endpoint.encode()).hexdigest()
 
 
 class CredentialUnavailable(RuntimeError):

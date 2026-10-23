@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 )
 
 from boss_say_hello.domain import AppConfig, PromptSet
+from boss_say_hello.storage.credentials import credential_scope
+from boss_say_hello.ui.fields import mark_invalid, required_label, watch_field
 
 
 class SettingsPage(QWidget):
@@ -26,6 +28,9 @@ class SettingsPage(QWidget):
         super().__init__()
         self.controller = controller
         self.config = AppConfig()
+        self.setStyleSheet(
+            'QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"], QComboBox[invalid="true"] {border: 1px solid #c62828; background: #fff5f5;}'
+        )
         root = QVBoxLayout(self)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -44,18 +49,20 @@ class SettingsPage(QWidget):
         row.addWidget(self.salary_min)
         row.addWidget(QLabel("至"))
         row.addWidget(self.salary_max)
-        form.addRow("城市", self.cities)
-        form.addRow("薪资区间", salary)
+        form.addRow("城市（可选）", self.cities)
+        form.addRow("薪资区间（可选）", salary)
         self.base_url = QLineEdit()
         self.base_url.setPlaceholderText("https://服务地址/v1")
         self.model = QLineEdit()
         self.model.setPlaceholderText("服务提供的模型名称")
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
-        self.secret.setPlaceholderText("留空使用本次会话密钥或系统凭据")
-        form.addRow("API 地址", self.base_url)
-        form.addRow("模型名称", self.model)
-        form.addRow("API 密钥", self.secret)
+        self.secret.setPlaceholderText("留空仅使用该 API 地址绑定的密钥；切换服务需重新输入")
+        form.addRow(required_label("API 地址"), self.base_url)
+        form.addRow(required_label("模型名称"), self.model)
+        form.addRow(required_label("API 密钥（未保存时）"), self.secret)
+        for field in (self.base_url, self.model, self.secret, self.salary_min, self.salary_max):
+            watch_field(field, field.textChanged)
         layout.addLayout(form)
         keys = QHBoxLayout()
         for label, fn in [
@@ -89,16 +96,25 @@ class SettingsPage(QWidget):
         self.interval = QDoubleSpinBox()
         self.interval.setRange(0.1, 86400)
         self.interval.setSuffix(" 秒")
-        limits.addRow("最低匹配分", self.min_score)
-        limits.addRow("每轮联系上限", self.max_contacts)
-        limits.addRow("联系间隔", self.interval)
+        limits.addRow(required_label("最低匹配分"), self.min_score)
+        limits.addRow(required_label("每轮联系上限"), self.max_contacts)
+        limits.addRow(required_label("联系间隔"), self.interval)
         self.auto_send = QCheckBox("自动发送（点击开始后按本轮快照执行）")
         self.send_attachment = QCheckBox("额外发送已选的平台简历附件")
         self.attachment = QComboBox()
         self.attachment.addItem("未选择平台附件", None)
         limits.addRow(self.auto_send)
         limits.addRow(self.send_attachment)
-        limits.addRow("平台附件", self.attachment)
+        self.attachment_label = QLabel("平台附件（关闭时可选）")
+        limits.addRow(self.attachment_label, self.attachment)
+        self.send_attachment.toggled.connect(
+            lambda enabled: self.attachment_label.setText(
+                '平台附件 <span style="color:#c62828;font-weight:700">*</span>（启用时必选）'
+                if enabled
+                else "平台附件（关闭时可选）"
+            )
+        )
+        watch_field(self.attachment, self.attachment.currentIndexChanged)
         layout.addLayout(limits)
         self.capabilities = QLabel("平台发送能力尚未核实；仍可生成预览。附件不会从本地 PDF 自动上传。")
         self.capabilities.setWordWrap(True)
@@ -133,12 +149,34 @@ class SettingsPage(QWidget):
         self.send_attachment.setChecked(config.send_attachment)
         self.attachment.setCurrentIndex(max(0, self.attachment.findData(config.attachment_id)))
 
-    def read_config(self):
+    def read_config(self, ready=False):
+        if ready:
+            missing = []
+            for field, name in ((self.base_url, "API 地址"), (self.model, "模型名称")):
+                empty = not field.text().strip()
+                mark_invalid(field, empty)
+                if empty:
+                    missing.append(name)
+            if missing:
+                raise ValueError("请填写必填项：" + "、".join(missing))
         try:
             low = int(self.salary_min.text()) if self.salary_min.text().strip() else None
             high = int(self.salary_max.text()) if self.salary_max.text().strip() else None
         except ValueError:
+            mark_invalid(self.salary_min, True)
+            mark_invalid(self.salary_max, True)
             raise ValueError("薪资请填写整数金额，或留空") from None
+        if low is not None and high is not None and low > high:
+            mark_invalid(self.salary_min, True)
+            mark_invalid(self.salary_max, True)
+            raise ValueError("薪资下限不能超过上限")
+        if (
+            self.auto_send.isChecked()
+            and self.send_attachment.isChecked()
+            and not self.attachment.currentData()
+        ):
+            mark_invalid(self.attachment, True)
+            raise ValueError("启用附件发送时必须选择平台简历")
         result = replace(
             self.config,
             cities=tuple(x for x in re.split(r"[,，;；\s]+", self.cities.text().strip()) if x),
@@ -154,7 +192,7 @@ class SettingsPage(QWidget):
             send_attachment=self.send_attachment.isChecked(),
             attachment_id=self.attachment.currentData(),
         )
-        result.validate()
+        result.validate(ready=ready)
         return result
 
     def save(self):
@@ -165,17 +203,27 @@ class SettingsPage(QWidget):
 
     def test(self):
         try:
-            self.controller.test_connection(self.read_config(), self.secret.text())
+            self.controller.test_connection(self.read_config(ready=True), self.secret.text())
         except ValueError as exc:
             self.status.setText(str(exc))
 
     def use_key(self):
-        self.controller.use_credential(self.config.credential_id, self.secret.text())
-        self.secret.clear()
+        try:
+            config = self.read_config()
+            credential_scope(config)
+            self.controller.use_credential(config, self.secret.text())
+            self.secret.clear()
+        except ValueError as exc:
+            self.status.setText(str(exc))
 
     def save_key(self):
-        self.controller.save_credential(self.config.credential_id, self.secret.text())
-        self.secret.clear()
+        try:
+            config = self.read_config()
+            credential_scope(config)
+            self.controller.save_credential(config, self.secret.text())
+            self.secret.clear()
+        except ValueError as exc:
+            self.status.setText(str(exc))
 
     def set_platform(self, caps, attachments):
         selected = self.attachment.currentData() or self.config.attachment_id

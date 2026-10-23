@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+from boss_say_hello.diagnostics import record
 from boss_say_hello.domain import ResumeVersion
 from boss_say_hello.resume.pdf import extract_pdf
 
@@ -15,7 +16,9 @@ class ResumeService:
         self.managed_root = managed_root
 
     async def import_pdf(self, path: Path) -> ResumeVersion:
+        record("resume.pdf.started")
         digest, text = await asyncio.to_thread(extract_pdf, path)
+        record("resume.pdf.extracted", char_count=len(text))
         keywords, summary = await self.ai.extract_resume(text)
         version = ResumeVersion(uuid4().hex, digest, text, tuple(keywords), summary, False)
         if self.managed_root:

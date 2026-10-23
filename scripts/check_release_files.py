@@ -32,7 +32,9 @@ def check_release_files(paths: list[str]) -> list[str]:
         bad_data = bool(root and root[0] in {"data", "logs", "resume"}) or any(
             re.search(r"\.(sqlite3?|db)(-|$)", p) for p in parts
         )
-        browser_file = name in {"cookies", "login data", "local state", "web data"}
+        browser_file = name in {"cookies", "login data", "local state", "web data"} or bool(
+            re.search(r"\.log(?:\.\d+)?$", name)
+        )
         if any(p in private_dirs for p in parts) or bad_env or bad_data or browser_file:
             rejected.append(path)
     return rejected

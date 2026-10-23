@@ -42,15 +42,18 @@ async def test_secret_is_fixed_for_run(tmp_path, config, resume, monkeypatch):
 
     b = Backend(lambda e: None, root=tmp_path, browser=FakeBrowser())
     await b.initialize()
-    b.secrets["default-model"] = "first"
+    from boss_say_hello.storage.credentials import credential_scope
+
+    scope = credential_scope(config())
+    b.secrets[scope] = "first"
     created = []
 
     def ai_factory(config, secret):
         created.append(secret)
-        b.secrets["default-model"] = "second"
+        b.secrets[scope] = "second"
         return Mock(close=AsyncMock())
 
     monkeypatch.setattr("boss_say_hello.runtime.backend.AiService", ai_factory)
     await b.run(config(), resume(), RunControl())
-    assert created == ["first"] and b.secrets["default-model"] == "second"
+    assert created == ["first"] and b.secrets[scope] == "second"
     await b.close()

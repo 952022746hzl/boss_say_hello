@@ -12,14 +12,18 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from boss_say_hello.ui.fields import mark_invalid, required_label, watch_field
+
 
 class ResumePage(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.version = None
+        self.setStyleSheet('QPlainTextEdit[invalid="true"] {border: 1px solid #c62828; background: #fff5f5;}')
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
+        row.addWidget(required_label("PDF 简历"))
         upload = QPushButton("导入 PDF 简历")
         upload.clicked.connect(self.choose_file)
         row.addWidget(upload)
@@ -36,9 +40,9 @@ class ResumePage(QWidget):
         self.summary.setPlaceholderText("可修改的真实经历摘要")
         editor = QWidget()
         fields = QVBoxLayout(editor)
-        fields.addWidget(QLabel("关键词"))
+        fields.addWidget(required_label("关键词"))
         fields.addWidget(self.keywords)
-        fields.addWidget(QLabel("经历摘要"))
+        fields.addWidget(required_label("经历摘要"))
         fields.addWidget(self.summary)
         split = QSplitter()
         split.addWidget(self.original)
@@ -50,6 +54,8 @@ class ResumePage(QWidget):
         layout.addWidget(self.confirm_button)
         self.keywords.textChanged.connect(self.invalidate)
         self.summary.textChanged.connect(self.invalidate)
+        watch_field(self.keywords, self.keywords.textChanged)
+        watch_field(self.summary, self.summary.textChanged)
 
     def choose_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择简历", "", "PDF (*.pdf)")
@@ -76,6 +82,15 @@ class ResumePage(QWidget):
 
     def confirm(self):
         if self.version:
+            missing = []
+            for field, name in ((self.keywords, "关键词"), (self.summary, "经历摘要")):
+                empty = not field.toPlainText().strip()
+                mark_invalid(field, empty)
+                if empty:
+                    missing.append(name)
+            if missing:
+                self.status.setText("请填写必填项：" + "、".join(missing))
+                return
             self.controller.confirm_resume(
                 self.version, tuple(self.keywords.toPlainText().splitlines()), self.summary.toPlainText()
             )

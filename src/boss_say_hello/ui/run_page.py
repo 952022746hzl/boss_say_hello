@@ -85,7 +85,7 @@ class RunPage(QWidget):
         elif event.run_id != self.run_id:
             return
         elif event.kind == "state":
-            self.status.setText(LABELS.get(p["status"], p["status"]))
+            self.status.setText(p.get("reason") or LABELS.get(p["status"], p["status"]))
         elif event.kind == "finished":
             self.active = False
             self.set_ready(self.ready)

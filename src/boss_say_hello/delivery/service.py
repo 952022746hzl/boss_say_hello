@@ -1,6 +1,7 @@
 import asyncio
 
 from boss_say_hello.browser.port import ActionBlocked, ActionResult
+from boss_say_hello.diagnostics import failure
 from boss_say_hello.domain import RunEvent
 from boss_say_hello.greetings.service import validate_greeting
 from boss_say_hello.matching.rules import check_job
@@ -38,6 +39,15 @@ class DeliveryService:
         if check_job(run.config, latest).status != "pass":
             return event("blocked", reason="最新岗位条件不满足")
         caps = await self.browser.capabilities()
+        if (
+            caps.initial_contact_behavior == "default_message"
+            and not control.default_message_acknowledged.is_set()
+        ):
+            control.default_message_required.set()
+            control.pause_requested.set()
+            return event(
+                "needs_default_ack", reason="平台首次联系会先发送默认招呼语；阅读说明后点击继续本轮才会执行"
+            )
         if (
             caps.initial_contact_behavior == "unknown"
             or validate_greeting(greeting, caps.greeting_limit).status != "pass"
@@ -79,13 +89,15 @@ class DeliveryService:
             except asyncio.CancelledError:
                 self.journal.finish_stage(attempt, stage, ActionResult("unknown", "请求中断，结果待核实"))
                 raise
-            except Exception:
+            except Exception as exc:
+                failure("delivery.failed", exc, run_id=run.id, job_id=job.id, attempt_id=attempt, stage=stage)
                 result = ActionResult("unknown", "操作异常，结果待核实；不会自动重发")
             self.journal.finish_stage(attempt, stage, result)
             if result.outcome != "succeeded":
                 return event(result.outcome, stages=self.journal.stages(attempt))
         try:
             returned = await self.browser.return_to_list()
-        except Exception:
+        except Exception as exc:
+            failure("browser.return_failed", exc, run_id=run.id, job_id=job.id)
             returned = False
         return event("sent", stages=self.journal.stages(attempt), returned_to_list=returned)

@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from boss_say_hello.domain import AppConfig, Job, ResumeVersion, RunSnapshot
+from tests.test_engine import setup_engine as setup_engine
 
 
 @pytest.fixture

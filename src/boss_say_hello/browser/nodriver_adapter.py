@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from urllib.parse import urlparse
 
 from boss_say_hello.browser import selectors as dom
@@ -13,6 +14,7 @@ from boss_say_hello.browser.port import (
     BrowserFailure,
     SessionInfo,
 )
+from boss_say_hello.diagnostics import failure, record
 from boss_say_hello.domain import Job
 
 
@@ -110,12 +112,28 @@ class NodriverAdapter:
     async def evaluate(self, tab, script):
         if tab is None:
             raise BrowserFailure("请先打开浏览器并手动登录")
+        started = time.monotonic()
+        marker = re.match(r"/\* (\w+) \*/", script)
+        operation = marker.group(1) if marker else "DOM"
+        record("browser.read.started", level="DEBUG", operation=operation)
         try:
             value = await asyncio.wait_for(tab.evaluate(script), 12)
+            record(
+                "browser.read.succeeded",
+                level="DEBUG",
+                operation=operation,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             return json.loads(value) if isinstance(value, str) else value
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            failure(
+                "browser.read.failed",
+                exc,
+                operation=operation,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             raise BrowserFailure("页面读取失败，请检查浏览器或重新登录") from None
 
     async def open(self, profile):

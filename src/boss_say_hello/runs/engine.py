@@ -2,6 +2,7 @@ import asyncio
 
 from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.browser.port import BrowserFailure
+from boss_say_hello.diagnostics import failure
 from boss_say_hello.domain import RunEvent, public_dict
 from boss_say_hello.runs.control import wait_until_ready
 
@@ -18,8 +19,22 @@ class RunEngine:
     async def ready(self, run, control, deadline=0):
         while not control.closing.is_set():
             if control.pause_requested.is_set():
+                needs_ack = (
+                    control.default_message_required.is_set()
+                    and not control.default_message_acknowledged.is_set()
+                )
                 self.publish(
-                    RunEvent(run.id, "state", {"status": "paused", "reason": "任务暂停；已发起的步骤不重发"})
+                    RunEvent(
+                        run.id,
+                        "state",
+                        {
+                            "status": "paused",
+                            "requires_default_ack": needs_ack,
+                            "reason": "平台首次联系会先发送默认招呼语。请阅读后点击继续本轮；否则保持暂停。"
+                            if needs_ack
+                            else "任务暂停；已发起的步骤不重发",
+                        },
+                    )
                 )
             if not await wait_until_ready(control, self.clock, deadline):
                 return False
@@ -89,6 +104,13 @@ class RunEngine:
                     greeting = await self.greetings.generate(run, job, assessment)
                     report("greeting", **public_dict(greeting))
                 except Exception as exc:
+                    failure(
+                        "run.error",
+                        exc,
+                        run_id=run.id,
+                        job_id=job.id,
+                        code=exc.code if isinstance(exc, AiFailure) else "evaluation_failed",
+                    )
                     report(
                         "error",
                         reason=exc.public_message
@@ -96,23 +118,28 @@ class RunEngine:
                         else "岗位评估或招呼语生成失败，本岗位不发送",
                     )
                     continue
-                if not await self.ready(run, control, deadline if run.config.auto_send else 0):
-                    break
-                before = self.journal.contact_count(run.id)
-                events = await self.delivery.deliver(run, job, assessment, greeting, control)
-                if self.journal.contact_count(run.id) > before:
-                    # Starting the interval after delivery is conservative even when a page responds slowly.
-                    deadline = self.clock.monotonic() + run.config.interval_seconds
-                for event in events:
-                    self.publish(event)
-                    if event.payload["status"] in ("unknown", "session_changed"):
-                        control.pause_requested.set()
+                while await self.ready(run, control, deadline if run.config.auto_send else 0):
+                    before = self.journal.contact_count(run.id)
+                    events = await self.delivery.deliver(run, job, assessment, greeting, control)
+                    if self.journal.contact_count(run.id) > before:
+                        deadline = self.clock.monotonic() + run.config.interval_seconds
+                    for event in events:
+                        self.publish(event)
+                        if event.payload["status"] in ("unknown", "session_changed", "needs_default_ack"):
+                            control.pause_requested.set()
+                    pending = any(
+                        e.payload["status"] in ("paused", "session_changed", "needs_default_ack")
+                        for e in events
+                    )
+                    if not (pending and self.journal.eligible(run.account_id, job.id)):
+                        break
             if control.closing.is_set():
                 status = "stopped"
         except asyncio.CancelledError:
             status = "interrupted"
             raise
-        except Exception:
+        except Exception as exc:
+            failure("run.error", exc, run_id=run.id, code="run_failed")
             status = "failed"
             self.publish(
                 RunEvent(run.id, "error", {"reason": "运行中断，请检查登录和本地记录；不会自动重试发送"})
