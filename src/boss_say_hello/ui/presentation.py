@@ -115,7 +115,7 @@ def details(events):
                 lines.extend(p["reasons"])
             for stage, result in p.get("stages", {}).items():
                 lines.append(
-                    f"{ {'contact': '联系', 'message': '消息', 'attachment': '附件'}.get(stage, stage) }：{result.get('detail', result.get('outcome', ''))}"
+                    f"{ {'contact': '联系', 'message': '消息'}.get(stage, stage) }：{result.get('detail', result.get('outcome', ''))}"
                 )
         lines.append("")
     return "\n".join(lines)

@@ -3,14 +3,15 @@ from dataclasses import replace
 import pytest
 
 
-def test_settings_restart_disables_delivery(tmp_path):
+@pytest.mark.parametrize("enabled", [True, False])
+def test_settings_restart_remembers_delivery_choice(tmp_path, enabled):
     from boss_say_hello.domain import AppConfig
     from boss_say_hello.storage.settings import ConfigStore
 
     store = ConfigStore(tmp_path)
-    saved = store.save(replace(AppConfig(), auto_send=True, send_attachment=True, attachment_id="a"))
+    saved = store.save(replace(AppConfig(), auto_send=enabled))
     loaded = ConfigStore(tmp_path).load()
-    assert not loaded.auto_send and not loaded.send_attachment
+    assert loaded.auto_send is enabled
     assert loaded.revision == saved.revision
 
 
@@ -62,3 +63,12 @@ def test_model_timeout_persists_and_old_settings_receive_default(tmp_path):
     assert store.load().model_timeout_seconds == 180
     store.save(replace(AppConfig(), model_timeout_seconds=240))
     assert ConfigStore(tmp_path).load().model_timeout_seconds == 240
+
+
+def test_missing_auto_send_defaults_to_enabled(tmp_path):
+    from boss_say_hello.storage.settings import ConfigStore
+
+    store = ConfigStore(tmp_path)
+    assert store.load().auto_send is True
+    (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+    assert store.load().auto_send is True

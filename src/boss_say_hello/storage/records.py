@@ -68,9 +68,7 @@ class RecordStore:
         ]
         # The journal is authoritative even if the process stopped before the
         # corresponding UI/event notification was persisted.
-        run_row = self.db.execute("SELECT data FROM runs WHERE id=?", (run_id,)).fetchone()
-        attachment = bool(run_row and json.loads(run_row[0])["config"]["send_attachment"])
-        expected = ["contact", "message"] + (["attachment"] if attachment else [])
+        expected = ["contact", "message"]
         for contact in self.db.execute(
             "SELECT id,job_id FROM contacts WHERE run_id=? AND cancelled=0", (run_id,)
         ):

@@ -67,10 +67,6 @@ class DeliveryService:
         greeting_check = validate_greeting(greeting, caps.greeting_limit)
         if greeting_check.status != "pass":
             return event("blocked", reason="；".join(greeting_check.reasons))
-        if run.config.send_attachment:
-            attachments = await self.browser.attachments()
-            if run.config.attachment_id not in {a.id for a in attachments}:
-                return event("blocked", reason="选定的简历附件无法核实")
         if control.pause_requested.is_set() or control.closing.is_set():
             return event("paused")
         self.browser.bind_control(control)
@@ -81,10 +77,6 @@ class DeliveryService:
             ("contact", lambda: self.browser.open_contact(job)),
             ("message", lambda: self.browser.send_text(job, greeting.text)),
         ]
-        if run.config.send_attachment:
-            actions.append(
-                ("attachment", lambda: self.browser.send_attachment(job, run.config.attachment_id))
-            )
         for stage, action in actions:
             if control.pause_requested.is_set() or control.closing.is_set():
                 if not self.journal.stages(attempt):

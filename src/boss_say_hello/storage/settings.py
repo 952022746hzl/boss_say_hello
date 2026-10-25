@@ -14,8 +14,7 @@ class ConfigStore:
     def load(self) -> AppConfig:
         if not self.path.exists():
             return AppConfig()
-        config = config_from_dict(json.loads(self.path.read_text(encoding="utf-8")))
-        return replace(config, auto_send=False, send_attachment=False)
+        return config_from_dict(json.loads(self.path.read_text(encoding="utf-8")))
 
     def save(self, config: AppConfig) -> AppConfig:
         config.validate()

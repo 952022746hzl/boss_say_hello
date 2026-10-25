@@ -8,7 +8,10 @@ from tests.test_engine import setup_engine as setup_engine
 
 @pytest.fixture
 def config():
-    return lambda **kw: replace(AppConfig(base_url="https://model.invalid/v1", model="test-model"), **kw)
+    # Shared scenario fixtures use preview explicitly; delivery tests opt in.
+    return lambda **kw: replace(
+        AppConfig(base_url="https://model.invalid/v1", model="test-model", auto_send=False), **kw
+    )
 
 
 @pytest.fixture

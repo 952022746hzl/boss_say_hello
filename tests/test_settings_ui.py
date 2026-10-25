@@ -14,7 +14,7 @@ def test_prompt_roundtrip_and_switches_do_not_start(qtbot, config):
     )
     p = SettingsPage(c)
     qtbot.addWidget(p)
-    assert not p.auto_send.isChecked() and not p.send_attachment.isChecked()
+    assert p.auto_send.isChecked()
     p.set_config(config(prompts=PromptSet("偏好A", "评分B", "风格C")))
     p.auto_send.setChecked(True)
     p.save()
@@ -109,19 +109,6 @@ def test_never_used_key_cannot_follow_endpoint_change(qtbot, config):
     page.test()
     c.test_connection.assert_not_called()
     assert page.secret.property("invalid") is True
-
-
-def test_saved_attachment_id_survives_restart_before_platform_discovery(qtbot, config):
-    from boss_say_hello.browser.port import BrowserCapabilities
-    from boss_say_hello.ui.settings_page import SettingsPage
-
-    page = SettingsPage(SimpleNamespace(save_settings=Mock()))
-    qtbot.addWidget(page)
-    page.set_config(config(attachment_id="previous-attachment"))
-    page.cities.setText("上海")
-    assert page.read_config().attachment_id == "previous-attachment"
-    page.set_platform(BrowserCapabilities(None, "unknown"), [])
-    assert page.read_config().attachment_id == "previous-attachment"
 
 
 def test_model_timeout_field_roundtrips_and_triggers_local_save(qtbot, config):

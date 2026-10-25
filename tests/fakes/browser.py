@@ -1,4 +1,4 @@
-from boss_say_hello.browser.port import ActionResult, AttachmentInfo, BrowserCapabilities, SessionInfo
+from boss_say_hello.browser.port import ActionResult, BrowserCapabilities, SessionInfo
 
 
 class FakeBrowser:
@@ -23,9 +23,6 @@ class FakeBrowser:
     async def iter_recommended(self):
         for job in self.jobs:
             yield job
-
-    async def attachments(self):
-        return [AttachmentInfo("resume1", "selected.pdf")]
 
     async def capabilities(self):
         return BrowserCapabilities(self.limit, self.behavior)
@@ -53,9 +50,6 @@ class FakeBrowser:
 
     async def send_text(self, job, text):
         return await self.action("message")
-
-    async def send_attachment(self, job, id):
-        return await self.action("attachment")
 
     async def return_to_list(self):
         return self.returned

@@ -196,7 +196,6 @@ class Backend:
             self.notice(
                 "platform",
                 caps=await self.browser.capabilities(),
-                attachments=await self.browser.attachments(),
             )
             if not self.busy:
                 await self.refresh_expectations()
@@ -255,10 +254,6 @@ class Backend:
                 if caps.initial_contact_behavior in {"default_message", "may_default_message"}:
                     control.default_message_required.set()
                     control.pause_requested.set()
-                if config.send_attachment and config.attachment_id not in {
-                    a.id for a in await self.browser.attachments()
-                }:
-                    raise ValueError("选定平台附件不可用，请重新检查登录状态和附件")
             # Hold this client's key and configuration until this run ends.
             key = await self.secret(config)
             ai = AgentClient(config, key)

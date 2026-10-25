@@ -23,7 +23,9 @@ class MainWindow(QMainWindow):
         heading = QLabel("BOSS 求职助手")
         heading.setStyleSheet("font-size: 24px; font-weight: 600; color: #103f46;")
         layout.addWidget(heading)
-        layout.addWidget(QLabel("AI 自主筛选 · 公司背景核查 · 简历匹配与招呼语 · 每次启动默认预览"))
+        layout.addWidget(
+            QLabel("AI 自主筛选 · 公司背景核查 · 简历匹配与招呼语 · 点击开始后执行，发送方式以配置为准")
+        )
         self.login = LoginPanel(controller)
         layout.addWidget(self.login)
         self.settings = SettingsPage(controller)
@@ -112,7 +114,7 @@ class MainWindow(QMainWindow):
             if p["account_id"] == self.tag_account:
                 self.settings.agent.set_expectations(p["items"])
         elif event.kind == "platform":
-            self.settings.set_platform(p["caps"], p["attachments"])
+            self.settings.set_platform(p["caps"])
         elif event.kind == "history_runs":
             self.history.set_runs(p["runs"])
         elif event.kind == "history_events":

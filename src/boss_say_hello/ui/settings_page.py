@@ -5,7 +5,6 @@ from PyQt6.QtCore import QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
@@ -142,23 +141,9 @@ class SettingsPage(QWidget):
         limits.addRow(required_label("每轮联系上限"), self.max_contacts)
         limits.addRow(required_label("联系间隔"), self.interval)
         self.auto_send = QCheckBox("自动发送（点击开始后按本轮快照执行）")
-        self.send_attachment = QCheckBox("额外发送已选的平台简历附件")
-        self.attachment = QComboBox()
-        self.attachment.addItem("未选择平台附件", None)
         limits.addRow(self.auto_send)
-        limits.addRow(self.send_attachment)
-        self.attachment_label = QLabel("平台附件（关闭时可选）")
-        limits.addRow(self.attachment_label, self.attachment)
-        self.send_attachment.toggled.connect(
-            lambda enabled: self.attachment_label.setText(
-                '平台附件 <span style="color:#c62828;font-weight:700">*</span>（启用时必选）'
-                if enabled
-                else "平台附件（关闭时可选）"
-            )
-        )
-        watch_field(self.attachment, self.attachment.currentIndexChanged)
         layout.addLayout(limits)
-        self.capabilities = QLabel("平台发送能力尚未核实；仍可生成预览。附件不会从本地 PDF 自动上传。")
+        self.capabilities = QLabel("平台发送能力尚未核实；仍可生成预览。")
         self.capabilities.setWordWrap(True)
         layout.addWidget(self.capabilities)
         self.status = QLabel()
@@ -177,8 +162,6 @@ class SettingsPage(QWidget):
         for field in (self.min_score, self.max_contacts, self.interval, self.model_timeout):
             field.valueChanged.connect(self.schedule_save)
         self.auto_send.toggled.connect(self.schedule_save)
-        self.send_attachment.toggled.connect(self.schedule_save)
-        self.attachment.currentIndexChanged.connect(self.schedule_save)
 
     def set_workspace(self, path):
         self.workspace_path = path
@@ -249,10 +232,6 @@ class SettingsPage(QWidget):
         self.max_contacts.setValue(config.max_contacts)
         self.interval.setValue(config.interval_seconds)
         self.auto_send.setChecked(config.auto_send)
-        self.send_attachment.setChecked(config.send_attachment)
-        if config.attachment_id and self.attachment.findData(config.attachment_id) < 0:
-            self.attachment.addItem("上次选择的附件（待登录核验）", config.attachment_id)
-        self.attachment.setCurrentIndex(max(0, self.attachment.findData(config.attachment_id)))
         self.loading = False
         self.dirty = False
 
@@ -277,13 +256,6 @@ class SettingsPage(QWidget):
             mark_invalid(self.salary_min, True)
             mark_invalid(self.salary_max, True)
             raise ValueError("薪资下限不能超过上限")
-        if (
-            self.auto_send.isChecked()
-            and self.send_attachment.isChecked()
-            and not self.attachment.currentData()
-        ):
-            mark_invalid(self.attachment, True)
-            raise ValueError("启用附件发送时必须选择平台简历")
         result = replace(
             self.config,
             cities=tuple(x for x in re.split(r"[,，;；\s]+", self.cities.text().strip()) if x),
@@ -297,8 +269,6 @@ class SettingsPage(QWidget):
             max_contacts=self.max_contacts.value(),
             interval_seconds=self.interval.value(),
             auto_send=self.auto_send.isChecked(),
-            send_attachment=self.send_attachment.isChecked(),
-            attachment_id=self.attachment.currentData(),
             **self.agent.values(),
         )
         result.validate(ready=ready)
@@ -376,15 +346,7 @@ class SettingsPage(QWidget):
         except ValueError as exc:
             self.status.setText(str(exc))
 
-    def set_platform(self, caps, attachments):
-        selected = self.attachment.currentData() or self.config.attachment_id
-        self.attachment.clear()
-        self.attachment.addItem("未选择平台附件", None)
-        for a in attachments:
-            self.attachment.addItem(a.name, a.id)
-        if selected and self.attachment.findData(selected) < 0:
-            self.attachment.addItem("上次选择的附件（当前未核实）", selected)
-        self.attachment.setCurrentIndex(max(0, self.attachment.findData(selected)))
+    def set_platform(self, caps):
         behavior = {
             "none": "未发现默认招呼语",
             "default_message": "首次联系会发送平台默认招呼语",

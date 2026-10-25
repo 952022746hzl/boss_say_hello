@@ -11,14 +11,11 @@ from tests.test_delivery import send, setup
 adapter = browser_fixture
 
 
-@pytest.mark.parametrize("stage", ["message", "attachment"])
-async def test_partial_known_failure_returns_to_list_without_repeating(stage, snapshot, config, job, storage):
+async def test_partial_known_failure_returns_to_list_without_repeating(snapshot, config, job, storage):
     browser, journal, service = setup(storage)
-    browser.outcomes[stage] = ActionResult("failed", "合成控件未就绪")
+    browser.outcomes["message"] = ActionResult("failed", "合成控件未就绪")
     browser.return_to_list = AsyncMock(return_value=True)
-    run = snapshot(
-        config=config(auto_send=True, send_attachment=stage == "attachment", attachment_id="resume1")
-    )
+    run = snapshot(config=config(auto_send=True))
     events = await send(service, run, job())
     assert events[0].payload["status"] == "failed"
     assert events[0].payload["returned_to_list"] is True

@@ -25,9 +25,7 @@ def script(action, job, value="", *, baseline_ids=None):
       const friend=chat?.__vue__?.['selectedFriend$'];
       const matched=Boolean(chat && a.boss && friend?.encryptJobId===a.job && friend?.encryptBossId===a.boss);
       const messages=matched?[...chat.querySelectorAll('.message-item.item-myself')]:[];
-      const matching=messages.filter(e=>a.action==='observe_attachment'
-        ? e.querySelector('[data-resume-id]')?.getAttribute('data-resume-id')===a.value
-        : (typeof e.__vue__?.$props?.message?.text==='string'?e.__vue__.$props.message.text:e.querySelector('.text-content')?.innerText)===a.value);
+      const matching=messages.filter(e=>(typeof e.__vue__?.$props?.message?.text==='string'?e.__vue__.$props.message.text:e.querySelector('.text-content')?.innerText)===a.value);
       const seen_ids=matching.map(e=>e.getAttribute('data-mid')).filter(Boolean);
       const ids=matching.filter(e=>{
         const delivered=Boolean(e.querySelector('.message-status.status-delivery,.message-status.status-read'));
@@ -39,7 +37,7 @@ def script(action, job, value="", *, baseline_ids=None):
       const dialogs=[...document.querySelectorAll('.dialog-wrap,.dialog-container,.dialog,[role=dialog]')].filter(e=>visible(e)&&/已向\s*BOSS\s*发送消息|已发送.*招呼|招呼.*已发送/i.test(e.innerText));
       const continues=[...new Set(dialogs.flatMap(d=>[...d.querySelectorAll('button,a,.btn')]))].filter(e=>enabled(e)&&e.innerText.trim()==='继续沟通');
       const canContinue=bound&&continues.length===1;
-      if(a.action==='observe'||a.action==='observe_attachment') return {matched,count,ids,seen_ids,can_continue:canContinue,input_ready:!!unique('#chat-input',chat||document)};
+      if(a.action==='observe') return {matched,count,ids,seen_ids,can_continue:canContinue,input_ready:!!unique('#chat-input',chat||document)};
       if(a.action==='contact') {
         const box=unique('.job-detail-box');
         const info=box?.__vue__?.$props?.data?.jobInfo;
@@ -79,12 +77,6 @@ def script(action, job, value="", *, baseline_ids=None):
         if(!send||send.innerText.trim()!=='发送') return {...state,code:'send_control_unverified'};
         if(!enabled(send)) return {...state,code:'send_control_not_ready'};
         if(a.action==='message_ready') return {...state,ready:true};
-        send.click(); return {clicked:true};
-      }
-      if(a.action==='attachment') {
-        const choices=[...chat.querySelectorAll('[data-resume-id]')].filter(e=>visible(e)&&e.getAttribute('data-resume-id')===a.value);
-        const send=choices.length===1?choices[0].querySelector('button[data-action="send-resume"]'):null;
-        if(!enabled(send)) return {clicked:false};
         send.click(); return {clicked:true};
       }
       return {clicked:false};

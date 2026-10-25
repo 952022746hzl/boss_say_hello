@@ -41,12 +41,10 @@ class AppConfig:
     base_url: str = ""
     model: str = ""
     credential_id: str = "default-model"
-    auto_send: bool = False
+    auto_send: bool = True
     min_score: int = 70
     max_contacts: int = 20
     interval_seconds: float = 30.0
-    send_attachment: bool = False
-    attachment_id: str | None = None
     model_timeout_seconds: int = 180
     target_title: str = ""
     outsourcing_check: bool = True
@@ -102,8 +100,6 @@ class AppConfig:
                 raise ValueError("API 地址须为 http/https 地址，不能包含凭据或查询参数")
         if ready and (not self.base_url or not self.model.strip()):
             raise ValueError("请填写 API 地址和模型名")
-        if self.auto_send and self.send_attachment and not self.attachment_id:
-            raise ValueError("请先选择平台简历附件")
 
 
 @dataclass(frozen=True)

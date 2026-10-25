@@ -28,7 +28,7 @@ async def test_backend_restart_never_starts_jobs(tmp_path):
     events = []
     b = Backend(events.append, root=tmp_path, browser=FakeBrowser())
     await b.initialize()
-    assert not b.config.auto_send and not b.config.send_attachment
+    assert b.config.auto_send
     assert not b.browser.calls
     await b.close()
 

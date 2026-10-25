@@ -34,18 +34,11 @@ async def test_preview_has_zero_contact_actions(snapshot, job, storage):
     assert events[-1].payload["status"] == "preview"
 
 
-async def test_attachment_disabled_never_calls_attachment(snapshot, config, job, storage):
+async def test_text_delivery_only_contacts_and_sends_message(snapshot, config, job, storage):
     browser, journal, service = setup(storage)
     await send(service, snapshot(config=config(auto_send=True)), job())
     assert browser.calls == ["contact", "message"]
     assert journal.contact_count("r1") == 1
-
-
-async def test_no_selected_attachment_blocks_start(snapshot, config, job, storage):
-    browser, journal, service = setup(storage)
-    with pytest.raises(ValueError):
-        await send(service, snapshot(config=config(auto_send=True, send_attachment=True)), job())
-    assert browser.calls == []
 
 
 async def test_unknown_blocks_retry_and_consumes_slot(snapshot, config, job, storage):
@@ -56,15 +49,6 @@ async def test_unknown_blocks_retry_and_consumes_slot(snapshot, config, job, sto
     await send(service, run, job())
     assert browser.calls == ["contact", "message"] and journal.contact_count("r1") == 1
     assert events[-1].payload["status"] == "unknown"
-
-
-async def test_attachment_failure_does_not_repeat_text(snapshot, config, job, storage):
-    browser, journal, service = setup(storage)
-    browser.outcomes["attachment"] = ActionResult("failed", "not sent")
-    run = snapshot(config=config(auto_send=True, send_attachment=True, attachment_id="resume1"))
-    await send(service, run, job())
-    await send(service, run, job())
-    assert browser.calls == ["contact", "message", "attachment"]
 
 
 async def test_navigation_failure_keeps_success(snapshot, config, job, storage):
@@ -82,7 +66,7 @@ async def test_pause_between_steps(snapshot, config, job, storage, stage, expect
     browser.after = lambda s: control.pause_requested.set() if s == stage else None
     await send(
         service,
-        snapshot(config=config(auto_send=True, send_attachment=True, attachment_id="resume1")),
+        snapshot(config=config(auto_send=True)),
         job(),
         control,
     )

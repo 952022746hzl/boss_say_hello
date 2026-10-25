@@ -224,7 +224,6 @@ class EventLog:
                 "continue_contact": "点击继续沟通，等待聊天页",
                 "fill_message": "填写招呼语",
                 "send_message": "点击发送",
-                "attachment": "发送选定附件",
             }
             message = "操作页面：" + labels.get(fields.get("action"), fields.get("action", ""))
         elif event == "ai.request.started" and fields.get("stage") == "agent_decision":

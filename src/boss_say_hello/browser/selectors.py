@@ -84,6 +84,3 @@ CAPABILITIES = r"""/* CAPABILITIES */ JSON.stringify((() => {
  const knownPage=['www.zhipin.com','zhipin.com'].includes(location.hostname)&&Boolean(document.querySelector('.c-expect-select,.chat-conversation'));
  return {greeting_limit:limit?Math.min(limit,200):knownPage?200:null,limit_source:limit?'editor':'application',initial_contact_behavior:behavior==='unknown'&&knownPage?'may_default_message':behavior};
 })())"""
-
-ATTACHMENTS = r"""/* ATTACHMENTS */ JSON.stringify([...document.querySelectorAll('[data-resume-id]')]
- .filter(el=>el.getClientRects().length).map(el=>({id:el.getAttribute('data-resume-id'),name:el.innerText.trim()})))"""

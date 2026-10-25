@@ -41,7 +41,7 @@ class RunPage(QWidget):
         for b in (self.start_button, self.pause_button, self.resume_button, self.stop_button):
             buttons.addWidget(b)
         layout.addLayout(buttons)
-        self.status = QLabel("先登录 → 导入并确认简历 → 配置模型和规则 → 开始预览")
+        self.status = QLabel("先登录 → 配置模型和规则 → 导入并确认简历 → 确认自动发送开关 → 开始本轮")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.steps = QPlainTextEdit()

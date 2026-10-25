@@ -9,7 +9,6 @@ from boss_say_hello.browser.actions import script
 from boss_say_hello.browser.port import (
     ActionBlocked,
     ActionResult,
-    AttachmentInfo,
     BrowserCapabilities,
     BrowserFailure,
     JobUnavailable,
@@ -248,7 +247,7 @@ class NodriverAdapter:
         session = await self.session()
         if not session.logged_in or session.account_id != job.account_id:
             return ActionResult("failed", "当前账号不匹配，未执行", attempted=False)
-        observe = "observe_attachment" if action == "attachment" else "observe"
+        observe = "observe"
         before = {"count": 0, "seen_ids": []}
         old_tabs = {t.target_id for t in self.browser.tabs} if self.browser else set()
         if action != "contact":
@@ -360,9 +359,6 @@ class NodriverAdapter:
 
     async def send_text(self, job, text):
         return await self._action(job, "message", text)
-
-    async def send_attachment(self, job, attachment_id):
-        return await self._action(job, "attachment", attachment_id)
 
     async def return_to_list(self):
         if self.list_tab is None:
@@ -529,16 +525,6 @@ class NodriverAdapter:
                 return raw
             await asyncio.sleep(0.5)
         raise BrowserFailure("岗位详情未能正确加载")
-
-    async def attachments(self):
-        raw = await self.evaluate(self.detail_tab or self.list_tab, dom.ATTACHMENTS)
-        return list(
-            {
-                item["id"]: AttachmentInfo(item["id"], item["name"])
-                for item in raw
-                if item.get("id") and item.get("name")
-            }.values()
-        )
 
     async def capabilities(self):
         if self.detail_tab is None and self.list_tab is None:
