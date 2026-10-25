@@ -29,10 +29,11 @@ async def test_search_uses_same_provider_and_public_company_terms(config):
         config(base_url="https://api.moonshot.cn/v1"), "test-key", httpx.MockTransport(respond)
     )
     try:
-        sources = await search.search({"name": "测试公司", "city": "深圳"}, "employment")
+        sources = await search.search({"name": "测试公司", "city": "深圳"})
         assert calls[0].url.path == "/v1/tools/search_pro"
         body = json.loads(calls[0].content)
         assert "测试公司" in body["text_query"] and body["limit"] == 5
+        assert all(term in body["text_query"] for term in ("公司全称", "主营业务", "外包", "驻场", "派遣"))
         assert sources[0]["id"] and "驻场" in sources[0]["text"]
         with pytest.raises(ValueError):
             await search.fetch("http://127.0.0.1/secrets")

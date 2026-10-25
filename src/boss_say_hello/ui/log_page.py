@@ -23,12 +23,15 @@ class LogPage(QWidget):
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
         self.level = QComboBox()
-        self.level.addItems(["全部", "DEBUG", "INFO", "WARNING", "ERROR"])
+        self.level.addItems(["进度与异常", "全部", "DEBUG", "INFO", "WARNING", "ERROR"])
         row.addWidget(QLabel("日志级别"))
         row.addWidget(self.level)
         self.follow = QCheckBox("自动滚动")
         self.follow.setChecked(True)
         row.addWidget(self.follow)
+        self.show_fields = QCheckBox("显示诊断字段")
+        self.show_fields.toggled.connect(self.render)
+        row.addWidget(self.show_fields)
         clear = QPushButton("清空当前显示")
         clear.clicked.connect(self.clear_view)
         row.addWidget(clear)
@@ -66,14 +69,27 @@ class LogPage(QWidget):
         level = self.level.currentText()
         previous = self.output.verticalScrollBar().value()
         lines = [
-            f"{e['time']} [{e['level']}] {e.get('message', e['event'])} {json.dumps(e.get('fields', {}), ensure_ascii=False)}"
+            self.format_entry(e)
             for e in self.entries
-            if level == "全部" or e["level"] == level
+            if level == "全部" or e["level"] == level or (level == "进度与异常" and e["level"] != "DEBUG")
         ]
         self.output.setPlainText("\n".join(lines))
         self.output.verticalScrollBar().setValue(
             self.output.verticalScrollBar().maximum() if self.follow.isChecked() else previous
         )
+
+    def format_entry(self, entry):
+        text = f"{entry['time']} [{entry['level']}] {entry.get('message', entry['event'])}"
+        fields = entry.get("fields", {})
+        if self.show_fields.isChecked():
+            return text + " " + json.dumps(fields, ensure_ascii=False)
+        if "duration_ms" in fields:
+            text += f" · 耗时 {fields['duration_ms'] / 1000:.2f} 秒"
+        if fields.get("code"):
+            text += " · 原因代码：" + fields["code"]
+        elif fields.get("error_type"):
+            text += " · " + fields["error_type"]
+        return text
 
     def clear_view(self):
         self.entries.clear()

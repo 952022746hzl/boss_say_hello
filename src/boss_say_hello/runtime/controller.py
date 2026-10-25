@@ -7,7 +7,7 @@ from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.browser.port import BrowserFailure
 from boss_say_hello.domain import RunEvent
 from boss_say_hello.runtime.backend import Backend
-from boss_say_hello.runtime.control import RunControl
+from boss_say_hello.runtime.control import RunControl, RunStartBlocked
 from boss_say_hello.storage.credentials import CredentialUnavailable
 
 
@@ -24,7 +24,9 @@ class Controller(QObject):
         self.generation = 0
         self.run_pending = False
         self.import_pending = False
+        self.confirm_pending = False
         self.default_warning_visible = False
+        self.shutting_down = False
         worker.event.connect(self.receive)
 
     def receive(self, event):
@@ -37,8 +39,13 @@ class Controller(QObject):
             self.resume_ready = self.current_resume.confirmed
         if event.kind == "run_idle":
             self.run_pending = False
+            self.default_warning_visible = False
+            if not self.shutting_down:
+                self.control = RunControl()
         if event.kind == "resume_import_idle":
             self.import_pending = False
+        if event.kind == "resume_confirm_idle":
+            self.confirm_pending = False
         if event.kind == "resume_draft":
             self.resume_ready = False
         self.event.emit(event)
@@ -60,13 +67,21 @@ class Controller(QObject):
                         duration_ms=round((time.monotonic() - started) * 1000),
                     )
                 return True
+            except RunStartBlocked as exc:
+                if self.backend and self.backend.log:
+                    self.backend.log.record("run.blocked", level="WARNING", code=exc.code)
+                self.worker.event.emit(
+                    RunEvent("", "ui_error", {"message": str(exc), "code": exc.code, "operation": method})
+                )
             except (ValueError, CredentialUnavailable, BrowserFailure) as exc:
                 self.log_failure("operation.failed", exc, operation=method)
-                self.worker.event.emit(RunEvent("", "ui_error", {"message": str(exc)}))
+                self.worker.event.emit(RunEvent("", "ui_error", {"message": str(exc), "operation": method}))
             except AiFailure as exc:
                 self.log_failure("operation.failed", exc, operation=method, code=exc.code)
                 self.worker.event.emit(
-                    RunEvent("", "ui_error", {"message": exc.public_message, "code": exc.code})
+                    RunEvent(
+                        "", "ui_error", {"message": exc.public_message, "code": exc.code, "operation": method}
+                    )
                 )
             except asyncio.CancelledError:
                 if self.backend and self.backend.log:
@@ -78,7 +93,10 @@ class Controller(QObject):
                     RunEvent(
                         "",
                         "ui_error",
-                        {"message": "操作失败，请检查配置、浏览器或本地文件；敏感错误详情不写入界面"},
+                        {
+                            "message": "操作失败，请检查配置、浏览器或本地文件；敏感错误详情不写入界面",
+                            "operation": method,
+                        },
                     )
                 )
             finally:
@@ -86,6 +104,8 @@ class Controller(QObject):
                     self.worker.event.emit(RunEvent("", "run_idle", {}))
                 if method == "import_resume":
                     self.worker.event.emit(RunEvent("", "resume_import_idle", {}))
+                if method == "confirm_resume":
+                    self.worker.event.emit(RunEvent("", "resume_confirm_idle", {}))
             return False
 
         return self.worker.submit(call())
@@ -125,14 +145,17 @@ class Controller(QObject):
     def check_login(self):
         return self.submit("check_login")
 
+    def refresh_expectations(self):
+        return self.submit("refresh_expectations")
+
     def invalidate_resume(self):
         self.generation += 1
         self.resume_ready = False
         self.event.emit(RunEvent("", "resume_dirty", {}))
 
     def import_resume(self, path, config, secret=""):
-        if self.import_pending:
-            raise ValueError("简历正在提炼，请等待当前导入结束")
+        if self.import_pending or self.confirm_pending:
+            raise ValueError("简历正在提炼或确认，请等待当前操作结束")
         config.validate(ready=True)
         self.invalidate_resume()
         self.import_pending = True
@@ -140,7 +163,11 @@ class Controller(QObject):
         return self.submit("import_resume", path, self.generation, config, secret)
 
     def confirm_resume(self, version, keywords, summary):
+        if self.import_pending or self.confirm_pending:
+            raise ValueError("简历正在提炼或确认，请等待当前操作结束")
         self.invalidate_resume()
+        self.confirm_pending = True
+        self.event.emit(RunEvent("", "resume_confirm_pending", {}))
         return self.submit("confirm_resume", version, keywords, summary, self.generation)
 
     def save_resume_draft(self, source_id, keywords, summary):
@@ -159,6 +186,8 @@ class Controller(QObject):
         return self.submit("run", config, self.current_resume, self.control)
 
     def request_pause(self):
+        if self.control.closing.is_set():
+            return
         self.control.pause_requested.set()
         if self.backend and self.backend.log:
             self.backend.log.record("pause.requested")
@@ -167,6 +196,8 @@ class Controller(QObject):
         )
 
     def request_resume(self):
+        if self.control.closing.is_set():
+            return
         if (
             self.control.default_message_required.is_set()
             and not self.control.default_message_acknowledged.is_set()
@@ -181,6 +212,7 @@ class Controller(QObject):
     def request_stop(self):
         self.control.closing.set()
         self.control.pause_requested.set()
+        self.event.emit(RunEvent("", "run_stopping", {}))
         if self.backend and self.backend.log:
             self.backend.log.record("stop.requested")
         self.event.emit(
@@ -188,6 +220,7 @@ class Controller(QObject):
         )
 
     def close(self):
+        self.shutting_down = True
         self.control.closing.set()
         self.control.pause_requested.set()
         self.worker.request_shutdown()

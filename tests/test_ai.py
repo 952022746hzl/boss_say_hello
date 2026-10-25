@@ -40,7 +40,7 @@ async def test_connection_request_has_no_resume(config):
     assert "response_format" not in bodies[0]
 
 
-@pytest.mark.parametrize("stage", ["assessment", "resume_extract", "greeting"])
+@pytest.mark.parametrize("stage", ["assessment", "resume_extract", "greeting", "greeting_shorten"])
 async def test_structured_requests_enable_json_mode(stage, config, snapshot, job):
     from boss_say_hello.ai.client import AiService
     from boss_say_hello.domain import Assessment
@@ -50,6 +50,7 @@ async def test_structured_requests_enable_json_mode(stage, config, snapshot, job
         "assessment": {"score": 80, "reason": "相关经验", "evidence": [], "gaps": [], "missing": []},
         "resume_extract": {"keywords": ["Python"], "summary": "服务开发"},
         "greeting": {"text": "您好，期待沟通", "evidence": []},
+        "greeting_shorten": {"text": "您好，期待沟通", "evidence": []},
     }
 
     def respond(request):
@@ -67,6 +68,8 @@ async def test_structured_requests_enable_json_mode(stage, config, snapshot, job
             await ai.assess(snapshot(), job())
         elif stage == "resume_extract":
             await ai.extract_resume("Python 服务开发")
+        elif stage == "greeting_shorten":
+            await ai._request([{"role": "user", "content": "压缩合成草稿"}], stage=stage)
         else:
             await ai.greet(snapshot(), job(), Assessment(80, "相关经验", (), (), ()))
         assert bodies[0]["response_format"] == {"type": "json_object"}

@@ -9,12 +9,7 @@ from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.diagnostics import record
 from boss_say_hello.storage.credentials import normalize_secret
 
-ANGLES = {
-    "identity": "公司全称 官网 主营业务 所在地",
-    "business": "主营产品 客户 业务模式",
-    "employment": "招聘 外包 驻场 外派 劳务派遣 用工",
-    "risk": "经营情况 公开公告",
-}
+OVERVIEW_QUERY = "公司全称 官网 主营业务 招聘 自研 外包 驻场 外派 劳务派遣 用工 经营风险"
 
 
 def public_url(url):
@@ -71,13 +66,11 @@ class CompanySearch:
                 "search_failed", "公司联网查询失败，不能视为背景已通过；请检查搜索服务权限及网络"
             ) from None
 
-    async def search(self, company, angle):
-        if angle not in ANGLES:
-            raise ValueError("不支持的公司查询角度")
+    async def search(self, company):
         name = company.get("name", "").strip()
         if not name or len(name) > 200:
             raise ValueError("请先读取公司主体")
-        query = f"{name} {company.get('city', '')} {ANGLES[angle]}"
+        query = f"{name} {company.get('city', '')} {OVERVIEW_QUERY}"
         data = await self._post("search_pro", {"text_query": query, "limit": 5, "timeout_seconds": 30})
         sources = []
         for item in data.get("search_results", [])[:5]:
@@ -96,7 +89,7 @@ class CompanySearch:
                     "title": item.get("title", "")[:200],
                     "text": content,
                     "queried_at": datetime.now(timezone.utc).isoformat(),
-                    "angle": angle,
+                    "angle": "overview",
                 }
             )
             self.allowed_urls.add(url)

@@ -56,7 +56,8 @@ DETAIL = r"""/* DETAIL */ JSON.stringify((() => {
   company_id:data?.brandComInfo?.encryptBrandId || '',company_full_name:data?.brandComInfo?.companyName || text('.company-info .company-name'),
   company_url:(box||document).querySelector('a[href*="/gongsi/"]')?.href || '',company_text:text('.company-info, .job-company-info'),
   salary:info?.salaryDesc || text('.job-salary, .salary'), city:info?.locationName || text('.job-area, .job-location'),
-  contact:text('.op-btn-chat'), recruiter_id:info?.encryptUserId || (box||document).querySelector('[data-boss-id]')?.getAttribute('data-boss-id') || null};
+  contact:text('.op-btn-chat'), recruiter_id:info?.encryptUserId || (box||document).querySelector('[data-boss-id]')?.getAttribute('data-boss-id') || null,
+  recruiter_name:typeof data?.bossInfo?.name==='string'?data.bossInfo.name:text('.boss-info .name, .boss-info-attr .name')};
 })())"""
 
 SCROLL = r"""/* SCROLL */ JSON.stringify((() => {
@@ -72,13 +73,16 @@ SCROLL = r"""/* SCROLL */ JSON.stringify((() => {
 
 CAPABILITIES = r"""/* CAPABILITIES */ JSON.stringify((() => {
  const input=document.querySelector('#chat-input');
- const raw=input?.getAttribute('maxlength') || input?.getAttribute('data-maxlength');
- const limit=raw && /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
+ const raw=input?.getAttribute('maxlength') || input?.getAttribute('data-maxlength') || input?.closest('.editor-container')?.__vue__?.$data?.MAX_PASTE_LENGTH;
+ const limit=raw && /^[1-9]\d*$/.test(String(raw)) ? Number(raw) : null;
  const contact=document.querySelector('.op-btn-chat');
  const hint=contact?.getAttribute('data-greeting-behavior');
  const notice=[...document.querySelectorAll('.greeting-tip,.chat-tip')].map(el=>el.innerText).join(' ');
  const behavior=hint==='none' || hint==='default_message' ? hint : /自动发送.*招呼|已向BOSS发送消息/.test(notice) ? 'default_message' : 'unknown';
- return {greeting_limit:limit,initial_contact_behavior:behavior};
+ // Before contact the editor does not exist. Use a conservative application cap,
+ // then verify the real editor limit again immediately before sending.
+ const knownPage=['www.zhipin.com','zhipin.com'].includes(location.hostname)&&Boolean(document.querySelector('.c-expect-select,.chat-conversation'));
+ return {greeting_limit:limit?Math.min(limit,200):knownPage?200:null,limit_source:limit?'editor':'application',initial_contact_behavior:behavior==='unknown'&&knownPage?'may_default_message':behavior};
 })())"""
 
 ATTACHMENTS = r"""/* ATTACHMENTS */ JSON.stringify([...document.querySelectorAll('[data-resume-id]')]

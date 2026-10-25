@@ -11,8 +11,36 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from boss_say_hello.agent.progress import PHASE_LABELS, TOOL_LABELS
+
+_context = contextvars.ContextVar("boss_diagnostic_fields", default=None)
 _current = contextvars.ContextVar("boss_diagnostics", default=None)
 FIELDS = {
+    "ready",
+    "text_matches",
+    "button_enabled",
+    "requires_default_ack",
+    "actor",
+    "control_id",
+    "controls",
+    "selected",
+    "document",
+    "path",
+    "matched",
+    "before_count",
+    "model",
+    "tool_count",
+    "tool_names",
+    "prompt_tokens",
+    "completion_tokens",
+    "result_keys",
+    "poll",
+    "clicked",
+    "limit",
+    "reason",
+    "phase",
+    "action",
+    "control_label",
     "tool",
     "step",
     "message_count",
@@ -42,16 +70,36 @@ FIELDS = {
     "stack",
 }
 MESSAGES = {
+    "browser.editor.wait": "DEBUG｜等待发送控件就绪：核对会话、草稿内容和按钮状态",
+    "browser.editor.refill": "输入框在页面加载后变空，重新填写本次草稿一次",
+    "greeting.shorten.started": "招呼语超过长度上限，正在请求模型压缩一次",
+    "greeting.shorten.succeeded": "招呼语压缩完成，长度校验通过",
+    "agent.candidates.synced": "推荐列表已刷新，已核对并清理不再显示的旧候选岗位",
+    "agent.job.unavailable": "岗位已不在当前推荐列表，已跳过并继续处理其他岗位",
+    "ai.request.details": "DEBUG｜模型请求规模与工具数量",
+    "browser.preference.snapshot": "DEBUG｜求职标签与可操作控件快照",
+    "agent.tool.completed": "DEBUG｜工具执行完成",
+    "ai.decision.details": "DEBUG｜模型决策返回与用量",
+    "browser.delivery.started": "执行沟通操作",
+    "browser.delivery.observed": "DEBUG｜核验目标会话与发送回执",
+    "browser.delivery.completed": "沟通操作结果已核验",
+    "browser.preference.started": "开始点击求职标签",
+    "browser.preference.verify": "正在回读页面，核验标签操作结果",
+    "browser.preference.completed": "求职标签控件操作已返回，页面状态已读取",
+    "browser.preference.stale": "控件信息已变化，本次未操作，正在刷新控件",
+    "run.cleaned": "本轮临时运行状态已清理，历史记录已保留",
+    "run.blocked": "本轮启动条件未满足，未执行发送",
     "stop.requested": "用户请求结束本轮",
     "run.tool_action": "AI 请求执行工具",
     "run.tool_result": "工具执行结果已记录",
-    "run.preferences": "本轮原生筛选已核验",
+    "run.preferences": "本轮求职标签已核验",
     "run.company_sources": "公司查询来源已保存",
     "run.background": "公司背景结论已生成",
     "company.search.started": "公司联网查询开始",
     "company.search.succeeded": "公司联网查询完成",
     "company.search.failed": "公司联网查询失败",
     "agent.tool.failed": "代理工具执行失败",
+    "agent.model.correction": "模型结果校验未通过，已限制纠正次数",
     "agent.run.failed": "代理运行中断",
     "browser.closed": "浏览器已退出，已暂停任务；点击打开 BOSS 登录可重新启动",
     "app.ready": "后台服务已就绪",
@@ -84,6 +132,7 @@ MESSAGES = {
     "resume": "简历版本已更新",
     "resume_draft": "本地简历编辑草稿已恢复",
     "resume_draft_saved": "关键词与经历摘要草稿已自动保存",
+    "resume.draft.cleanup_failed": "简历确认已保存，旧草稿文件暂未清理；旧草稿不会覆盖新版本",
     "pause.requested": "用户请求暂停",
     "resume.requested": "用户请求继续",
     "app.unhandled": "捕获未处理异常",
@@ -98,6 +147,15 @@ MESSAGES = {
     "resume.pdf.started": "开始提取 PDF",
     "resume.pdf.extracted": "PDF 文本已提取",
 }
+
+
+@contextmanager
+def scope(**fields):
+    token = _context.set({**(_context.get() or {}), **fields})
+    try:
+        yield
+    finally:
+        _context.reset(token)
 
 
 def record(event, **fields):
@@ -138,12 +196,44 @@ class EventLog:
     def record(self, event, *, level="INFO", **fields):
         if self.closed:
             return
-        fields = {k: v for k, v in fields.items() if k in FIELDS}
+        fields = {k: v for k, v in {**(_context.get() or {}), **fields}.items() if k in FIELDS}
+        message = MESSAGES.get(event, event)
+        if event == "run.state" and fields.get("requires_default_ack"):
+            message = "等待发送确认：" + fields.get("reason", "首次联系可能发送平台默认招呼语")
+            message += "；请到「岗位与运行」点击「已知晓，继续自动发送」，或结束本轮关闭自动发送后预览"
+        elif event == "run.state" and fields.get("status") == "paused":
+            message = "已暂停：" + fields.get("reason", "请核对后点击继续本轮")
+        elif event == "run.state" and fields.get("phase"):
+            message = f"第 {fields.get('step', '?')} 步｜{PHASE_LABELS.get(fields['phase'], fields['phase'])}"
+            if fields.get("tool"):
+                message += "：" + TOOL_LABELS.get(fields["tool"], fields["tool"])
+        elif event == "run.tool_action":
+            message = (
+                "程序执行：" if fields.get("actor") == "program" else "AI 决定执行："
+            ) + TOOL_LABELS.get(fields.get("tool"), fields.get("tool", ""))
+        elif event == "agent.tool.blocked":
+            message = "本次操作未执行：" + fields.get("reason", "岗位条件尚未满足")
+        elif event in {"agent.tool.failed", "agent.model.correction"} and fields.get("reason"):
+            message += "：" + fields["reason"]
+        elif event == "browser.preference.started":
+            action = "点击"
+            message = f"操作页面：{action}「{fields.get('control_label', '')}」"
+        elif event == "browser.delivery.started":
+            labels = {
+                "contact": "点击立即沟通",
+                "continue_contact": "点击继续沟通，等待聊天页",
+                "fill_message": "填写招呼语",
+                "send_message": "点击发送",
+                "attachment": "发送选定附件",
+            }
+            message = "操作页面：" + labels.get(fields.get("action"), fields.get("action", ""))
+        elif event == "ai.request.started" and fields.get("stage") == "agent_decision":
+            message = "已向模型请求下一步决策，正在等待模型响应"
         entry = {
             "time": datetime.now().astimezone().isoformat(timespec="milliseconds"),
             "level": level,
             "event": event,
-            "message": MESSAGES.get(event, event),
+            "message": message,
             "thread": threading.current_thread().name,
             "fields": fields,
         }
@@ -176,9 +266,12 @@ class EventLog:
     def event(self, event):
         p = event.payload
         fields = {"run_id": event.run_id}
-        for key in ("job_id", "status", "score", "mode", "tool"):
+        for key in ("job_id", "status", "score", "mode", "tool", "step", "phase", "actor"):
             if key in p:
                 fields[key] = p[key]
+        if event.kind == "state":
+            fields["reason"] = p.get("reason", "")
+            fields["requires_default_ack"] = bool(p.get("requires_default_ack"))
         if event.kind == "session":
             fields.update(logged_in=p["session"].logged_in, account_verified=bool(p["session"].account_id))
         elif event.kind in ("settings", "settings_saved"):

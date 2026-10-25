@@ -36,6 +36,9 @@ class FakeBrowser:
     def bind_control(self, control):
         self.control = control
 
+    def release_run(self):
+        self.control = None
+
     async def action(self, stage):
         self.calls.append(stage)
         if self.after:

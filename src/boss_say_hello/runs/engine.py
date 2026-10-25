@@ -30,7 +30,7 @@ class RunEngine:
                         {
                             "status": "paused",
                             "requires_default_ack": needs_ack,
-                            "reason": "平台首次联系会先发送默认招呼语。请阅读后点击继续本轮；否则保持暂停。"
+                            "reason": "点击立即沟通可能先发送平台默认招呼语，然后程序会发送生成的招呼语。请阅读后点击继续本轮；否则保持暂停。"
                             if needs_ack
                             else "任务暂停；已发起的步骤不重发",
                         },

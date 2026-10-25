@@ -14,17 +14,16 @@ def test_agent_settings_roundtrip_and_required_target(qtbot, config, tmp_path):
     qtbot.addWidget(page)
     page.set_config(config())
     assert page.agent.outsourcing_check.isChecked()
-    page.agent.target_title.setText("Java")
+    page.agent.set_expectations([{"label": "Java(深圳)", "title": "Java", "city": "深圳"}])
+    page.agent.target_title.setCurrentIndex(0)
     page.agent.outsourcing_check.setChecked(False)
     page.agent.limits["max_candidates"].setValue(8)
-    page.agent.filters["学历"].setCurrentText("本科")
     store = ConfigStore(tmp_path)
     store.save(page.read_config())
     page.set_config(store.load())
-    assert page.agent.target_title.text() == "Java"
+    assert page.agent.target_title.currentText() == "Java(深圳)"
     assert not page.agent.outsourcing_check.isChecked()
     assert page.read_config().max_candidates == 8
-    assert page.read_config().native_filters["学历"] == "本科"
     page.agent.target_title.clear()
     # API test is independent from job target requirements.
     page.read_config(ready=True)

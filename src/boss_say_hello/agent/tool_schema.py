@@ -57,24 +57,20 @@ BACKGROUND = obj(
 )
 DEFINITIONS = {
     "open_preferences": (
-        "打开固定的推荐页或简历期望页，随后读取控件；仅在条件设置阶段使用",
-        dict(destination={"type": "string", "enum": ["recommendations", "expectations"]}),
+        "打开岗位推荐页，读取账号已有求职标签；仅在条件设置阶段使用",
+        {},
     ),
-    "inspect_preferences": ("读取期望职位和原生筛选控件；只能操作返回的控件 ID", {}),
+    "inspect_preferences": ("读取已有求职标签控件；只能操作返回的控件 ID", {}),
     "preference_action": (
-        "点击或填写已观察到的期望/筛选控件，返回真实变化；禁止盲目保存",
-        dict(
-            action={"type": "string", "enum": ["click", "input"]},
-            option_id=TEXT,
-            value={"type": ["string", "null"]},
-        ),
+        "操作本次观察返回的控件 ID；只点击已有求职标签。不得猜测 ID 或用选项序号代替 ID；返回新快照后旧 ID 失效。不新增或编辑求职期望",
+        dict(option_id=TEXT),
     ),
-    "verify_preferences": ("核对本轮目标职位、城市、原生筛选是否实际生效", {}),
+    "verify_preferences": ("核对目标职位和城市对应的求职标签是否实际生效", {}),
     "list_jobs": ("读取下一批候选岗位卡片，达到候选上限或到底时返回 ended", {}),
     "read_job": ("读取已发现岗位的完整职责和公司线索", dict(job_id=TEXT)),
     "search_company": (
-        "按公司身份联网查询，返回可引用来源；无证据不能断言无外包",
-        dict(job_id=TEXT, angle={"type": "string", "enum": ["identity", "business", "employment", "risk"]}),
+        "每公司一次综合查询主体、业务和外包用工线索，返回可引用来源；无证据保持待确认，不重复查询",
+        dict(job_id=TEXT),
     ),
     "assess_job": (
         "根据真实岗位和已读取来源提交岗位分与背景判断，程序计算最终分并执行硬排除",

@@ -42,6 +42,7 @@ class DeliveryService:
                 "city",
                 "salary_raw",
                 "recruiter_id",
+                "recruiter_name",
                 "company_id",
                 "company_full_name",
                 "company_url",
@@ -52,19 +53,20 @@ class DeliveryService:
             return event("blocked", reason="最新岗位条件不满足")
         caps = await self.browser.capabilities()
         if (
-            caps.initial_contact_behavior == "default_message"
+            caps.initial_contact_behavior in {"default_message", "may_default_message"}
             and not control.default_message_acknowledged.is_set()
         ):
             control.default_message_required.set()
             control.pause_requested.set()
             return event(
-                "needs_default_ack", reason="平台首次联系会先发送默认招呼语；阅读说明后点击继续本轮才会执行"
+                "needs_default_ack",
+                reason="点击立即沟通可能先发送平台默认招呼语，然后程序会发送生成的招呼语；阅读说明后点击继续本轮才会执行",
             )
-        if (
-            caps.initial_contact_behavior == "unknown"
-            or validate_greeting(greeting, caps.greeting_limit).status != "pass"
-        ):
-            return event("blocked", reason="平台沟通行为或消息长度限制未核实")
+        if caps.initial_contact_behavior == "unknown":
+            return event("blocked", reason="平台沟通行为尚未核实，本次未发送")
+        greeting_check = validate_greeting(greeting, caps.greeting_limit)
+        if greeting_check.status != "pass":
+            return event("blocked", reason="；".join(greeting_check.reasons))
         if run.config.send_attachment:
             attachments = await self.browser.attachments()
             if run.config.attachment_id not in {a.id for a in attachments}:
@@ -104,12 +106,36 @@ class DeliveryService:
             except Exception as exc:
                 failure("delivery.failed", exc, run_id=run.id, job_id=job.id, attempt_id=attempt, stage=stage)
                 result = ActionResult("unknown", "操作异常，结果待核实；不会自动重发")
+            if stage == "contact" and result.outcome == "failed" and result.attempted is False:
+                self.journal.finish_stage(attempt, stage, ActionResult("cancelled", result.detail))
+                self.journal.cancel_before_contact(attempt)
+                return event(
+                    "failed", stages=self.journal.stages(attempt), reason="未点击立即沟通，已释放本次预留"
+                )
             self.journal.finish_stage(attempt, stage, result)
             if result.outcome != "succeeded":
-                return event(result.outcome, stages=self.journal.stages(attempt))
-        try:
-            returned = await self.browser.return_to_list()
-        except Exception as exc:
-            failure("browser.return_failed", exc, run_id=run.id, job_id=job.id)
-            returned = False
+                returned = (
+                    await self._return_to_list(run, control)
+                    if result.outcome == "failed" and stage != "contact"
+                    else False
+                )
+                return event(result.outcome, stages=self.journal.stages(attempt), returned_to_list=returned)
+        returned = await self._return_to_list(run, control)
         return event("sent", stages=self.journal.stages(attempt), returned_to_list=returned)
+
+    async def _return_to_list(self, run, control):
+        try:
+            if control.pause_requested.is_set() or control.closing.is_set():
+                return False
+            session = await self.browser.session()
+            if (
+                not session.logged_in
+                or session.account_id != run.account_id
+                or control.pause_requested.is_set()
+                or control.closing.is_set()
+            ):
+                return False
+            return await self.browser.return_to_list()
+        except Exception as exc:
+            failure("browser.return_failed", exc, run_id=run.id)
+            return False

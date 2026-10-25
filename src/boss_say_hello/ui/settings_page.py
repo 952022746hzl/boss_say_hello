@@ -116,6 +116,8 @@ class SettingsPage(QWidget):
         self.agent = AgentSettings()
         layout.addWidget(self.agent)
         self.agent.changed.connect(self.schedule_save)
+        self.agent.city_selected.connect(self.cities.setText)
+        self.agent.refresh_requested.connect(lambda: self.controller.refresh_expectations())
         tabs = self.prompt_tabs = QTabWidget()
         self.prompts = []
         for name in ["求职偏好", "评分标准", "招呼语风格"]:
@@ -304,18 +306,22 @@ class SettingsPage(QWidget):
 
     def read_run_config(self):
         from boss_say_hello.agent.contracts import validate_agent_goal
-        from boss_say_hello.browser.preferences import required_filters
 
         result = self.read_config(ready=True)
+        selected = self.agent.target_title.currentData()
+        invalid_tag = not selected or (
+            selected["title"] != result.target_title or (selected["city"],) != result.cities
+        )
         for field, invalid in (
-            (self.agent.target_title, not result.target_title),
+            (self.agent.target_title, invalid_tag),
             (self.cities, len(result.cities) != 1),
             (self.salary_min, result.salary_min is None),
             (self.salary_max, result.salary_max is None),
         ):
             mark_invalid(field, invalid)
+        if invalid_tag:
+            raise ValueError("请登录并从下拉框选择已有求职标签；城市需与所选标签一致")
         validate_agent_goal(result)
-        required_filters(result)
         return result
 
     def save(self):
@@ -382,8 +388,12 @@ class SettingsPage(QWidget):
         behavior = {
             "none": "未发现默认招呼语",
             "default_message": "首次联系会发送平台默认招呼语",
+            "may_default_message": "首次联系可能先发送默认招呼语，运行时需确认",
             "unknown": "首次联系行为未核实",
         }
+        limit_label = (
+            "应用招呼语上限（发送时再核验编辑器）" if caps.limit_source == "application" else "消息长度上限"
+        )
         self.capabilities.setText(
-            f"{behavior.get(caps.initial_contact_behavior, '行为未核实')}；消息长度限制：{caps.greeting_limit or '待核实'}。未知时自动发送会被阻止。"
+            f"{behavior.get(caps.initial_contact_behavior, '行为未核实')}；{limit_label}：{caps.greeting_limit or '待核实'}。未知时自动发送会被阻止。"
         )

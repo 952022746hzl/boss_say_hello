@@ -22,6 +22,7 @@ class ResumePage(QWidget):
         self.config_reader = config_reader
         self.version = None
         self.importing = False
+        self.confirming = False
         self.dirty = False
         self.auto_save_timer = QTimer(self)
         self.auto_save_timer.setSingleShot(True)
@@ -81,12 +82,23 @@ class ResumePage(QWidget):
 
     def set_importing(self, importing):
         self.importing = importing
-        self.upload_button.setEnabled(not importing)
-        self.keywords.setEnabled(not importing)
-        self.summary.setEnabled(not importing)
-        self.confirm_button.setEnabled(not importing and self.version is not None)
+        self.update_editability()
         if importing:
             self.status.setText("正在提炼新简历 · 完成后可编辑关键词和摘要")
+
+    def set_confirming(self, confirming):
+        self.confirming = confirming
+        self.update_editability()
+        if confirming:
+            self.auto_save_timer.stop()
+            self.status.setText("正在保存已确认版本 · 完成后可继续编辑")
+
+    def update_editability(self):
+        enabled = not (self.importing or self.confirming)
+        self.upload_button.setEnabled(enabled)
+        self.keywords.setEnabled(enabled)
+        self.summary.setEnabled(enabled)
+        self.confirm_button.setEnabled(enabled and self.version is not None)
 
     def invalidate(self):
         self.status.setText("未确认 · 草稿自动保存，修改完成后请确认使用")
@@ -96,7 +108,7 @@ class ResumePage(QWidget):
 
     def flush_save(self):
         self.auto_save_timer.stop()
-        if self.dirty:
+        if self.dirty and not self.confirming:
             return self.controller.save_resume_draft(
                 self.version.id if self.version else None,
                 self.keywords.toPlainText(),
@@ -128,7 +140,7 @@ class ResumePage(QWidget):
         self.status.setText(
             "已确认 · 新任务使用此版本" if version.confirmed else "未确认 · 请核对关键词和摘要"
         )
-        self.confirm_button.setEnabled(not self.importing)
+        self.update_editability()
         del blockers
 
     def confirm(self):

@@ -30,6 +30,7 @@ def test_window_responsive_during_background_wait(qtbot):
     window = MainWindow(controller)
     qtbot.addWidget(window)
     window.show()
+    window.run.pending()
     started = threading.Event()
 
     async def blocked():

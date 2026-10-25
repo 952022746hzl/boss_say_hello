@@ -34,4 +34,6 @@ def test_unconfirmed_disables_start_and_results_visible(qtbot, job):
     assert p.table.item(0, 4).text() == "90"
     assert "Python 匹配" in p.details.toPlainText() and "你好" in p.details.toPlainText()
     p.on_event(RunEvent("r", "finished", {"status": "limit_reached", "contacts": 2}))
+    assert not p.start_button.isEnabled()
+    p.idle()
     assert "2" in p.status.text() and p.start_button.isEnabled()

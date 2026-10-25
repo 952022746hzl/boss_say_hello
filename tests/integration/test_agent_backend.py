@@ -16,7 +16,7 @@ async def test_backend_runs_agent_to_preview(config, snapshot, job, storage, tmp
         ("verify_preferences", {}),
         ("list_jobs", {}),
         ("read_job", {"job_id": "j1"}),
-        ("search_company", {"job_id": "j1", "angle": "employment"}),
+        ("search_company", {"job_id": "j1"}),
         ("assess_job", assessment_args()),
         ("draft_greeting", {"job_id": "j1"}),
         ("finish", {}),

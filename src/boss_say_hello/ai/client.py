@@ -1,4 +1,6 @@
+import json
 import time
+from dataclasses import asdict
 
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
@@ -7,6 +9,8 @@ from boss_say_hello.ai.context import ContextBuilder, budget
 from boss_say_hello.ai.prompts import BOUNDARY, RESUME_SCHEMA
 from boss_say_hello.ai.schemas import AiFailure, decode, parse_assessment, parse_greeting, strings, text
 from boss_say_hello.diagnostics import failure, record
+from boss_say_hello.greetings.salutation import address_greeting
+from boss_say_hello.greetings.service import GREETING_MAX_LENGTH, message_length
 from boss_say_hello.storage.credentials import normalize_secret
 
 
@@ -65,7 +69,7 @@ class AiService:
         )
         try:
             options = {}
-            if stage in {"resume_extract", "assessment", "greeting"}:
+            if stage in {"resume_extract", "assessment", "greeting", "greeting_shorten"}:
                 options["response_format"] = {"type": "json_object"}
             response = await self.client.chat.completions.create(
                 model=self.config.model, messages=messages, **options
@@ -137,11 +141,45 @@ class AiService:
         )
 
     async def greet(self, run, job, assessment):
-        return parse_greeting(
-            decode(
-                await self._request(ContextBuilder.greeting_messages(run, job, assessment), stage="greeting")
+        messages = ContextBuilder.greeting_messages(run, job, assessment)
+        greeting = parse_greeting(decode(await self._request(messages, stage="greeting")))
+        greeting = address_greeting(greeting, job.recruiter_name)
+        if message_length(greeting.text) > GREETING_MAX_LENGTH:
+            record(
+                "greeting.shorten.started",
+                char_count=message_length(greeting.text),
+                limit=GREETING_MAX_LENGTH,
             )
-        )
+            shortened = parse_greeting(
+                decode(
+                    await self._request(
+                        messages
+                        + [
+                            {
+                                "role": "assistant",
+                                "content": json.dumps(asdict(greeting), ensure_ascii=False),
+                            },
+                            {
+                                "role": "user",
+                                "content": f"上述草稿过长。请仅压缩表达，保留指定称谓及最相关真实经历，不增加事实。正文控制在80—150字符，含称谓绝不超过{GREETING_MAX_LENGTH}字符；英文每个字母也计入。仍返回相同JSON结构。",
+                            },
+                        ],
+                        stage="greeting_shorten",
+                    )
+                )
+            )
+            greeting = address_greeting(shortened, job.recruiter_name)
+            if message_length(greeting.text) > GREETING_MAX_LENGTH:
+                raise AiFailure(
+                    "greeting_too_long",
+                    f"招呼语压缩一次后仍为 {message_length(greeting.text)} 个字符，超过 {GREETING_MAX_LENGTH} 上限；未发送，不再自动压缩",
+                )
+            record(
+                "greeting.shorten.succeeded",
+                char_count=message_length(greeting.text),
+                limit=GREETING_MAX_LENGTH,
+            )
+        return greeting
 
     async def close(self):
         await self.client.close()

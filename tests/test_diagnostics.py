@@ -78,6 +78,29 @@ def test_log_page_filters_and_bounds_view(qtbot):
     assert len(page.entries) <= 1000
 
 
+def test_log_view_defaults_to_readable_progress_and_optional_diagnostics(qtbot, tmp_path):
+    from boss_say_hello.diagnostics import EventLog
+    from boss_say_hello.domain import RunEvent
+    from boss_say_hello.ui.log_page import LogPage
+
+    page = LogPage()
+    qtbot.addWidget(page)
+    log = EventLog(tmp_path, page.add_entry)
+    try:
+        log.event(RunEvent("r1", "state", {"status": "running", "phase": "model_wait", "step": 3}))
+        log.record("browser.read.started", level="DEBUG", operation="SESSION")
+        log.record("browser.preference.started", action="click", control_label="Java(深圳)")
+        text = page.output.toPlainText()
+        assert "第 3 步｜等待模型决策" in text
+        assert "点击「Java(深圳)」" in text
+        assert "SESSION" not in text and '"phase"' not in text
+        page.show_fields.setChecked(True)
+        page.level.setCurrentText("全部")
+        assert "SESSION" in page.output.toPlainText() and '"phase"' in page.output.toPlainText()
+    finally:
+        log.close()
+
+
 def test_failure_logs_underlying_types_without_exception_messages(tmp_path):
     from boss_say_hello.diagnostics import EventLog
 

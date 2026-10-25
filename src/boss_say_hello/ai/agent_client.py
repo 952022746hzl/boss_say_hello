@@ -9,6 +9,14 @@ class AgentClient(AiService):
     async def decide(self, messages, tools):
         started = time.monotonic()
         record("ai.request.started", stage="agent_decision", message_count=len(messages))
+        record(
+            "ai.request.details",
+            level="DEBUG",
+            model=self.config.model,
+            tool_count=len(tools),
+            message_count=len(messages),
+            char_count=sum(len(str(m.get("content", ""))) for m in messages),
+        )
         try:
             response = await self.client.chat.completions.create(
                 model=self.config.model, messages=messages, tools=tools, tool_choice="required"
@@ -22,6 +30,15 @@ class AgentClient(AiService):
                 "ai.request.succeeded",
                 stage="agent_decision",
                 duration_ms=round((time.monotonic() - started) * 1000),
+            )
+            usage = getattr(response, "usage", None)
+            record(
+                "ai.decision.details",
+                level="DEBUG",
+                finish_reason=choice.finish_reason,
+                tool_names=[c.function.name for c in choice.message.tool_calls],
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
             )
             return message
         except Exception as exc:

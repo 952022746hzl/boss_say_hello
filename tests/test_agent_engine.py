@@ -21,6 +21,7 @@ def environment(config, snapshot, job, storage, tmp_path, **overrides):
         session=AsyncMock(return_value=SimpleNamespace(account_id="a1", logged_in=True)),
         bind_control=lambda c: None,
         bind_goal=lambda c: None,
+        release_run=lambda: None,
         preference_snapshot=AsyncMock(
             return_value={
                 "document": "doc",
@@ -110,8 +111,6 @@ async def test_different_tool_paths_can_reach_same_assessment(
     await prepare(executor)
     for name in order:
         args = {"job_id": "j1", "reason": "收集证据"}
-        if name == "search_company":
-            args["angle"] = "identity"
         await executor.execute(name, args)
     result = await executor.execute("assess_job", assessment_args())
     assert result["score"] == 76
@@ -122,7 +121,7 @@ async def test_suspicion_toggle_is_snapshot_rule(config, snapshot, job, storage,
     executor, *_ = environment(config, snapshot, job, storage, tmp_path, outsourcing_check=enabled)
     await prepare(executor)
     await executor.execute("read_job", {"job_id": "j1", "reason": "读详情"})
-    await executor.execute("search_company", {"job_id": "j1", "reason": "核对业务", "angle": "business"})
+    await executor.execute("search_company", {"job_id": "j1", "reason": "核对业务"})
     result = await executor.execute("assess_job", assessment_args("suspected"))
     assert result["status"] == expected
 
@@ -210,18 +209,30 @@ async def test_loop_returns_real_observations_and_keeps_reasoning_out_of_history
     assert any(m.get("tool_call_id") == "inspect_preferences" and "doc" in m["content"] for m in second)
     events = storage.events(executor.run.id)
     assert events[-1].payload["status"] == "agent_finished"
+    assert [e.payload.get("phase") for e in events if e.kind == "state"] == [
+        "page_read",
+        "verify",
+        "page_read",
+        "model_wait",
+        "page_read",
+        "model_wait",
+        "record",
+    ]
     assert "PRIVATE_THOUGHT" not in str(events)
 
 
-async def test_new_sources_invalidate_previous_score_and_greeting(config, snapshot, job, storage, tmp_path):
+async def test_duplicate_company_query_preserves_same_evidence_score_and_greeting(
+    config, snapshot, job, storage, tmp_path
+):
     executor, *_ = environment(config, snapshot, job, storage, tmp_path, auto_send=True)
     await prepare(executor)
     await executor.execute("read_job", {"job_id": "j1", "reason": "详情"})
-    await executor.execute("search_company", {"job_id": "j1", "reason": "身份", "angle": "identity"})
+    await executor.execute("search_company", {"job_id": "j1", "reason": "身份"})
     await executor.execute("assess_job", assessment_args())
     executor.greetings["j1"] = object()
-    await executor.execute("search_company", {"job_id": "j1", "reason": "风险", "angle": "risk"})
-    assert "j1" not in executor.assessments and "j1" not in executor.greetings
+    await executor.execute("search_company", {"job_id": "j1", "reason": "风险"})
+    assert "j1" in executor.assessments and "j1" in executor.greetings
+    assert executor.search.search.await_count == 1
 
 
 async def test_loop_budget_ends_without_any_contact(config, snapshot, job, storage, tmp_path):

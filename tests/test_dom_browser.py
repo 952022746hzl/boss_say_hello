@@ -22,7 +22,7 @@ async def test_current_recommendation_dom(tmp_path):
     <div class="job-detail-box"><div class="job-detail-header"><span class="job-name">Python</span><a class="op-btn-chat">立即沟通</a></div><div class="job-detail-body">Python 接口开发</div></div></div>
     <script>
     document.querySelector('#wrap').__vue__={$store:{state:{hasLoadedUser:true,userInfo:{encryptUserId:'synthetic-account'}}}};
-    document.querySelector('.job-detail-box').__vue__={$props:{data:{jobInfo:{encryptId:'synthetic',encryptUserId:'synthetic-hr',jobName:'Python',locationName:'北京',salaryDesc:'20-30K',postDescription:'Python 接口开发'},brandComInfo:{brandName:'合成公司'}}}};
+    document.querySelector('.job-detail-box').__vue__={$props:{data:{jobInfo:{encryptId:'synthetic',encryptUserId:'synthetic-hr',jobName:'Python',locationName:'北京',salaryDesc:'20-30K',postDescription:'Python 接口开发'},brandComInfo:{brandName:'合成公司'},bossInfo:{name:'王先生'}}}};
     </script>"""
     path = tmp_path / "synthetic.html"
     path.write_text(html, encoding="utf-8")
@@ -39,38 +39,55 @@ async def test_current_recommendation_dom(tmp_path):
         assert cards[0]["salary"] == "20-30K" and cards[0]["company"] == "合成公司"
         detail = json.loads(await page.evaluate(dom.DETAIL))
         assert detail["recruiter_id"] == "synthetic-hr" and detail["city"] == "北京"
+        assert detail["recruiter_name"] == "王先生"
+        await page.evaluate(
+            "delete document.querySelector('.job-detail-box').__vue__.$props.data.bossInfo; document.querySelector('.job-detail-box').insertAdjacentHTML('beforeend', '<div class=\"boss-info\"><span class=\"name\">张女士</span></div>')"
+        )
+        assert json.loads(await page.evaluate(dom.DETAIL))["recruiter_name"] == "张女士"
         from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 
         adapter = NodriverAdapter()
         adapter.list_tab = page
+        assert await adapter.existing_expectations() == [
+            {"label": "Java(深圳)", "title": "Java", "city": "深圳"}
+        ]
         await page.evaluate(
             "window.contactClicks=0; document.querySelector('.op-btn-chat').onclick=()=>window.contactClicks++"
         )
         detail = await adapter.read_detail("https://www.zhipin.com/job_detail/synthetic.html")
         assert detail["recruiter_id"] == "synthetic-hr"
         assert await page.evaluate("window.contactClicks") == 0
+        from boss_say_hello.browser.port import JobUnavailable
+        from boss_say_hello.runtime.control import RunControl
+
+        adapter.bind_control(RunControl())
+        assert await adapter.current_candidate_ids() == {"synthetic"}
+        with pytest.raises(JobUnavailable):
+            await adapter.read_detail("https://www.zhipin.com/job_detail/missing.html")
         from boss_say_hello.browser.preferences import SNAPSHOT, action_script
 
         state = json.loads(await page.evaluate(SNAPSHOT))
         labels = [c["label"] for c in state["controls"]]
+        assert "20-50K" not in labels and "深圳" not in labels
         assert "立即沟通" not in labels and "隐藏项" not in labels
         control = next(c for c in state["controls"] if c["label"] == "Java(深圳)")
         assert json.loads(await page.evaluate(action_script(control["id"])))["acted"]
         current = json.loads(await page.evaluate(SNAPSHOT))
         assert current["expectations"][0]["selected"]
         assert not json.loads(await page.evaluate(action_script(control["id"])))["acted"]
-        assert current["filters"][0]["selected"] == ["20-50K"]
-        assert any(c["label"] == "添加求职期望" for c in current["controls"])
+        assert not any(c["label"] == "添加求职期望" for c in current["controls"])
         await page.evaluate(
             """document.body.insertAdjacentHTML('beforeend', `<div class="expectation-form"><h3>添加求职期望</h3><div class="form-item"><span class="item-label">期望职位</span><input type="text" value="Java"></div><button onclick="window.saved=true">完成</button></div>`)"""
         )
         observed = json.loads(await page.evaluate(SNAPSHOT))
-        save = next(c for c in observed["controls"] if c["label"] == "完成")
-        await page.evaluate("document.querySelector('.expectation-form input').value='Other'")
-        result = json.loads(
-            await page.evaluate(action_script(save["id"], guard_form=observed["form_values"]))
+        assert not any(c["label"] == "完成" or c["kind"] == "input" for c in observed["controls"])
+        # An existing control must also be rejected if its DOM is repurposed.
+        selected = next(c for c in observed["controls"] if c["label"] == "Java(深圳)")
+        await page.evaluate(
+            "document.querySelector('.expectation-form').append(document.querySelector('.expect-item'))"
         )
-        assert not result["acted"] and not await page.evaluate("!!window.saved")
+        assert not json.loads(await page.evaluate(action_script(selected["id"])))["acted"]
+        assert not await page.evaluate("!!window.saved")
     finally:
         from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 

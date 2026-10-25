@@ -1,25 +1,14 @@
 import pytest
 
 
-def test_verified_preferences_require_all_native_conditions(config):
+def test_verified_preferences_require_selected_target_tag(config):
     from boss_say_hello.browser.preferences import preferences_match
 
-    cfg = config(
-        target_title="Java",
-        cities=("深圳",),
-        salary_min=18000,
-        salary_max=25000,
-        native_filters={"经验": "3-5年", "薪资": "20-50K"},
-    )
-    snap = {
-        "expectations": [{"label": "Java(深圳)", "selected": True}],
-        "city": "深圳",
-        "filters": [{"field": "经验", "selected": ["3-5年"]}, {"field": "薪资", "selected": ["20-50K"]}],
-    }
+    cfg = config(target_title="Java", cities=("深圳",), salary_min=18000, salary_max=25000)
+    snap = {"expectations": [{"label": "Java(深圳)", "selected": True}]}
     assert preferences_match(snap, cfg)
-    assert not preferences_match({**snap, "city": "上海"}, cfg)
-    assert not preferences_match({**snap, "filters": []}, cfg)
-    assert not preferences_match({**snap, "expectations": [{"label": "推荐", "selected": True}]}, cfg)
+    assert not preferences_match({"expectations": [{"label": "Java(上海)", "selected": True}]}, cfg)
+    assert not preferences_match({"expectations": [{"label": "Java(深圳)", "selected": False}]}, cfg)
 
 
 async def test_preference_action_requires_fresh_snapshot_and_pause_guard():
@@ -28,57 +17,28 @@ async def test_preference_action_requires_fresh_snapshot_and_pause_guard():
 
     browser = NodriverAdapter()
     with pytest.raises(BrowserFailure):
-        await browser.preference_action("click", "unknown")
+        await browser.preference_action("unknown")
 
 
-async def test_duplicate_expectation_save_is_blocked(config):
+async def test_removed_or_stale_control_is_blocked(config):
     from threading import Event
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
-    from boss_say_hello.browser.port import BrowserFailure
 
     browser = NodriverAdapter()
     browser.bind_control(SimpleNamespace(pause_requested=Event(), closing=Event()))
     browser.bind_goal(config(target_title="Java", cities=("深圳",), salary_min=18000, salary_max=25000))
-    browser.preference_state = {
-        "adding": True,
-        "controls": [{"id": "save", "kind": "click", "label": "完成"}],
-        "expectations": [{"label": "Java(深圳)", "selected": False}],
-        "form_values": {
-            "期望职位": "Java",
-            "工作城市": "深圳",
-            "薪资下限": "18k",
-            "薪资上限": "25k",
-            "求职类型": "全职",
-        },
-    }
-    with pytest.raises(BrowserFailure, match="已有"):
-        await browser.preference_action("click", "save")
-
-
-def test_goal_salary_cannot_be_silently_rewritten(config):
-    from boss_say_hello.browser.preferences import expectation_form_matches
-
-    cfg = config(target_title="Java", cities=("深圳",), salary_min=18000, salary_max=25000)
-    assert expectation_form_matches(
-        {"期望职位": "Java", "工作城市": "深圳", "薪资下限": "18k", "薪资上限": "25k", "求职类型": "全职"},
-        cfg,
+    browser.preference_state = {"controls": [{"id": "tag", "kind": "click", "label": "Java(深圳)"}]}
+    browser.preference_snapshot = AsyncMock(
+        return_value={"controls": [{"id": "new", "kind": "click", "label": "Java(深圳)"}]}
     )
-    assert not expectation_form_matches(
-        {"期望职位": "Java", "工作城市": "深圳", "薪资下限": "15k", "薪资上限": "25k", "求职类型": "全职"},
-        cfg,
-    )
-
-
-def test_salary_requires_native_bucket_even_without_explicit_filter(config):
-    from boss_say_hello.browser.preferences import preferences_match
-
-    cfg = config(target_title="Java", cities=("深圳",), salary_min=20000, salary_max=30000)
-    snap = {"expectations": [{"label": "Java(深圳)", "selected": True}], "city": "深圳", "filters": []}
-    assert not preferences_match(snap, cfg)
-    snap["filters"] = [{"field": "薪资", "selected": ["20-50K"]}]
-    assert preferences_match(snap, cfg)
+    browser.evaluate = AsyncMock()
+    result = await browser.preference_action("save")
+    assert result["action_result"]["status"] == "stale_control"
+    assert result["controls"][0]["id"] == "new"
+    browser.evaluate.assert_not_called()
 
 
 async def test_candidates_read_cards_without_opening_details(config):

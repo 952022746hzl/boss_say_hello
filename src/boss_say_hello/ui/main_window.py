@@ -15,6 +15,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.controller = controller
         self.close_save_futures = None
+        self.tag_account = None
         self.setWindowTitle("BOSS 求职助手")
         self.resize(1100, 760)
         central = QWidget()
@@ -92,6 +93,10 @@ class MainWindow(QMainWindow):
             self.resume.set_importing(True)
         elif event.kind == "resume_import_idle":
             self.resume.set_importing(False)
+        elif event.kind == "resume_confirm_pending":
+            self.resume.set_confirming(True)
+        elif event.kind == "resume_confirm_idle":
+            self.resume.set_confirming(False)
         elif event.kind == "resume_draft":
             self.resume.restore_draft(p["draft"])
             self.run.set_ready(False)
@@ -99,6 +104,13 @@ class MainWindow(QMainWindow):
             self.resume.acknowledge_save(p["generation"])
         elif event.kind == "session":
             self.login.update_session(p["session"])
+            account = p["session"].account_id if p["session"].logged_in else None
+            if account != self.tag_account or account is None:
+                self.tag_account = account
+                self.settings.agent.set_expectations([])
+        elif event.kind == "expectations":
+            if p["account_id"] == self.tag_account:
+                self.settings.agent.set_expectations(p["items"])
         elif event.kind == "platform":
             self.settings.set_platform(p["caps"], p["attachments"])
         elif event.kind == "history_runs":
@@ -108,19 +120,38 @@ class MainWindow(QMainWindow):
         elif event.kind in ("notice", "ui_error"):
             self.statusBar().showMessage(p["message"])
             self.settings.status.setText(p["message"])
+            if event.kind == "ui_error" and p.get("operation") == "run":
+                self.run.status.setText(p["message"])
+            if event.kind == "ui_error" and p.get("operation") == "confirm_resume":
+                self.resume.status.setText(p["message"])
             if p.get("code") in ("missing_key", "invalid_key", "authentication_failed"):
                 mark_invalid(self.settings.secret, True)
         elif event.kind == "run_pending":
-            self.run.active = True
-            self.run.set_ready(self.run.ready)
+            self.settings.status.clear()
+            self.statusBar().clearMessage()
+            self.settings.agent.refresh_tags.setEnabled(False)
+            self.settings.agent.target_title.setEnabled(False)
+            self.run.pending()
+        elif event.kind == "run_stopping":
+            self.run.stopping_run()
         elif event.kind == "run_idle":
-            self.run.active = False
-            self.run.set_ready(self.run.ready)
+            self.settings.agent.refresh_tags.setEnabled(True)
+            self.settings.agent.target_title.setEnabled(True)
+            self.run.idle()
         else:
             self.run.on_event(event)
+            if event.kind == "state" and p.get("requires_default_ack"):
+                self.tabs.setCurrentWidget(self.run)
+                self.statusBar().showMessage(
+                    "任务等待发送确认，请阅读提示并点击「已知晓，继续自动发送」；尚未开始岗位处理"
+                )
 
     def closeEvent(self, event):
-        if not self.controller.control.closing.is_set():
+        if not self.controller.shutting_down:
+            if self.controller.confirm_pending:
+                event.ignore()
+                QTimer.singleShot(100, self.close)
+                return
             if self.close_save_futures is None and (self.settings.dirty or self.resume.dirty):
                 try:
                     self.close_save_futures = [

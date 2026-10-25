@@ -10,19 +10,27 @@ async def ready_to_send(config, snapshot, job, storage, tmp_path):
     ex, *rest = environment(config, snapshot, job, storage, tmp_path, auto_send=True)
     await prepare(ex)
     await ex.execute("read_job", {"job_id": "j1", "reason": "详情"})
-    await ex.execute("search_company", {"job_id": "j1", "reason": "身份", "angle": "identity"})
+    await ex.execute("search_company", {"job_id": "j1", "reason": "身份"})
     await ex.execute("assess_job", assessment_args())
     ex.greetings["j1"] = object()
     return ex, *rest
 
 
-async def test_failed_refresh_of_company_evidence_revokes_eligibility(
+async def test_failed_company_query_after_identity_change_revokes_eligibility(
     config, snapshot, job, storage, tmp_path
 ):
-    ex, _, search, delivery, _ = await ready_to_send(config, snapshot, job, storage, tmp_path)
+    ex, browser, search, delivery, _ = await ready_to_send(config, snapshot, job, storage, tmp_path)
+    browser.refresh_job.return_value = job(company_id="different-company")
+    await ex.execute("read_job", {"job_id": "j1", "reason": "公司身份变化"})
+    browser.company_info.return_value = {
+        "id": "different-company",
+        "name": "另一公司",
+        "city": "北京",
+        "url": "https://example.org",
+    }
     search.search = AsyncMock(side_effect=AiFailure("search_failed"))
     with pytest.raises(AiFailure):
-        await ex.execute("search_company", {"job_id": "j1", "reason": "补充风险", "angle": "risk"})
+        await ex.execute("search_company", {"job_id": "j1", "reason": "补充风险"})
     with pytest.raises(ValueError):
         await ex.execute("send_greeting", {"job_id": "j1", "reason": "旧分不能发送"})
     delivery.deliver.assert_not_called()
@@ -36,7 +44,7 @@ async def test_nested_undeclared_tool_fields_rejected(config, snapshot, job, sto
         await ex.execute("assess_job", args)
 
 
-async def test_manual_change_to_unconfigured_filter_revokes_receipt(config):
+async def test_manual_change_to_selected_tag_revokes_receipt(config):
     from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 
     browser = NodriverAdapter()
@@ -48,7 +56,7 @@ async def test_manual_change_to_unconfigured_filter_revokes_receipt(config):
         "expectations": [{"label": "Java(深圳)", "selected": True}],
         "filters": [{"field": "薪资", "selected": ["20-50K"]}, {"field": "学历", "selected": ["不限"]}],
     }
-    current = {**original, "filters": [original["filters"][0], {"field": "学历", "selected": ["本科"]}]}
+    current = {**original, "expectations": [{"label": "Python(深圳)", "selected": True}]}
     browser.preference_snapshot = AsyncMock(return_value=current)
     assert not await browser.verify_preferences(original)
 

@@ -27,7 +27,7 @@ class ResumeService:
         self.store.save_resume(version)
         return version
 
-    def revise(self, version, keywords, summary):
+    def revise(self, version, keywords, summary, *, persist=True):
         draft = replace(
             version,
             id=uuid4().hex,
@@ -35,7 +35,8 @@ class ResumeService:
             summary=summary.strip(),
             confirmed=False,
         )
-        self.store.save_resume(draft)
+        if persist:
+            self.store.save_resume(draft)
         return draft
 
     def confirm(self, version):

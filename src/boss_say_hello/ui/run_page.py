@@ -23,6 +23,7 @@ class RunPage(QWidget):
         self.config_reader = config_reader
         self.ready = False
         self.active = False
+        self.stopping = False
         self.run_id = None
         self.rows = {}
         self.events = {}
@@ -61,10 +62,41 @@ class RunPage(QWidget):
         split.addWidget(self.table)
         split.addWidget(self.details)
         layout.addWidget(split, 1)
+        self.set_ready(False)
 
     def set_ready(self, ready):
         self.ready = ready
         self.start_button.setEnabled(ready and not self.active)
+        for button in (self.pause_button, self.resume_button, self.stop_button):
+            button.setEnabled(self.active and not self.stopping)
+
+    def clear_results(self):
+        self.resume_button.setText("继续本轮")
+        self.status.setStyleSheet("")
+        self.run_id = None
+        self.rows.clear()
+        self.events.clear()
+        self.table.setRowCount(0)
+        self.details.clear()
+        self.steps.clear()
+
+    def pending(self):
+        self.clear_results()
+        self.active = True
+        self.stopping = False
+        self.set_ready(self.ready)
+        self.status.setText("正在检查本轮配置并启动…")
+
+    def idle(self):
+        self.clear_results()
+        self.active = False
+        self.stopping = False
+        self.set_ready(self.ready)
+
+    def stopping_run(self):
+        self.stopping = True
+        self.set_ready(self.ready)
+        self.status.setText("正在结束本轮，等待当前操作返回并保存历史…")
 
     def start(self):
         try:
@@ -82,23 +114,27 @@ class RunPage(QWidget):
     def on_event(self, event):
         p = event.payload
         if event.kind == "started":
+            self.clear_results()
             self.run_id = event.run_id
             self.active = True
             self.set_ready(self.ready)
-            self.rows.clear()
-            self.events.clear()
-            self.table.setRowCount(0)
-            self.details.clear()
-            self.steps.clear()
             self.status.setText("自动发送运行中" if p["mode"] == "auto" else "预览运行中 · 不发送消息")
         elif event.run_id != self.run_id:
             return
         elif event.kind == "state":
-            self.status.setText(p.get("reason") or LABELS.get(p["status"], p["status"]))
+            waiting_ack = bool(p.get("requires_default_ack"))
+            self.resume_button.setText("已知晓，继续自动发送" if waiting_ack else "继续本轮")
+            self.pause_button.setEnabled(self.active and not self.stopping and p["status"] != "paused")
+            self.resume_button.setEnabled(self.active and not self.stopping and p["status"] == "paused")
+            self.status.setStyleSheet("color: #975600; font-weight: bold;" if waiting_ack else "")
+            reason = p.get("reason") or LABELS.get(p["status"], p["status"])
+            self.status.setText(("等待发送确认：" if waiting_ack else "") + reason)
         elif event.kind == "finished":
-            self.active = False
+            self.stopping = True
             self.set_ready(self.ready)
-            self.status.setText(f"{LABELS.get(p['status'], p['status'])} · 本轮联系/未知占额 {p['contacts']}")
+            self.status.setText(
+                f"{LABELS.get(p['status'], p['status'])} · 本轮联系/未知占额 {p['contacts']} · 记录可在本地历史查看"
+            )
         if event.kind == "error":
             self.status.setText(p["reason"])
         if event.kind in {"tool_action", "tool_result"}:

@@ -1,7 +1,7 @@
-import json
+from boss_say_hello.agent.progress import TOOL_LABELS
 
 LABELS = {
-    "agent_finished": "AI 已结束本轮（详见步骤理由）",
+    "agent_finished": "AI 已结束本轮",
     "budget_reached": "已达到决策预算",
     "excluded": "外包嫌疑已排除",
     "preview": "预览草稿",
@@ -25,6 +25,46 @@ LABELS = {
 }
 
 
+def tool_result_summary(tool, result):
+    if "error" in result:
+        return "未完成：" + result["error"]
+    if result.get("code") == "job_unavailable":
+        return result["reason"]
+    if "controls" in result:
+        action = result.get("action_result", {})
+        parts = []
+        if action.get("message"):
+            parts.append(action["message"])
+        elif action:
+            verb = "悬停展开" if action.get("action") == "hover" else "点击"
+            parts.append(f"已{verb}「{action.get('label', '')}」，已回读页面")
+        selected = [e["label"] for e in result.get("expectations", []) if e["selected"]]
+        parts.append("已选标签：" + ("、".join(selected) or "未选择"))
+        parts.append(f"当前可操作控件 {len(result['controls'])} 个")
+        return "；".join(parts)
+    if tool == "verify_preferences":
+        return "目标求职标签核验通过" if result.get("verified") else "标签尚未通过核验"
+    if tool == "list_jobs":
+        return f"读取 {len(result.get('jobs', []))} 个岗位" + (
+            "；已到本轮范围末尾" if result.get("ended") else ""
+        )
+    if tool == "read_job":
+        return "岗位详情已读取，硬条件已检查"
+    if tool == "search_company":
+        return f"已获得 {len(result.get('sources', []))} 条公司来源，待核对证据"
+    if tool == "draft_greeting":
+        return "招呼语草稿已生成，可在岗位详情查看"
+    if tool == "finish":
+        return f"本轮已结束：发现 {result.get('discovered', 0)} 个岗位，已处理 {result.get('handled', 0)} 个"
+    if result.get("reason"):
+        return result["reason"]
+    if result.get("status"):
+        return LABELS.get(result["status"], result["status"])
+    if tool == "send_greeting":
+        return "发送处理已返回，送达状态请查看岗位详情"
+    return "操作结果已记录，可在本地历史查看"
+
+
 def details(events):
     lines = []
     for e in events:
@@ -41,9 +81,13 @@ def details(events):
         elif e.kind == "greeting":
             lines.append("招呼语：" + p["text"])
         elif e.kind == "tool_action":
-            lines.append(f"行动 {p['tool']}：{p['reason']}")
+            actor = "程序操作" if p.get("actor") == "program" else "AI 行动"
+            lines.append(f"{actor} · {TOOL_LABELS.get(p['tool'], p['tool'])}：{p['reason']}")
         elif e.kind == "tool_result":
-            lines.append(f"结果 {p['tool']}：" + json.dumps(p["result"], ensure_ascii=False)[:3000])
+            lines.append(
+                f"结果 · {TOOL_LABELS.get(p['tool'], p['tool'])}："
+                + tool_result_summary(p["tool"], p["result"])
+            )
         elif e.kind == "company_sources":
             lines.append("公司主体：" + p["company"].get("name", "待核实"))
             for source in p["sources"]:

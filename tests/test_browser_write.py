@@ -39,9 +39,12 @@ async def test_click_is_not_delivery_evidence(adapter, job):
 
 async def test_verified_new_outgoing_message(adapter, job):
     adapter.evaluate.side_effect = [
-        {"matched": True, "count": 2},
+        {"matched": True, "count": 2, "seen_ids": ["m1", "m2"]},
+        {"filled": True},
+        {"ready": True},
+        {"ready": True},
         {"clicked": True},
-        {"matched": True, "count": 3},
+        {"matched": True, "count": 3, "ids": ["m1", "m2", "m3"]},
     ]
     result = await adapter.send_text(job(), "你好")
     assert result.outcome == "succeeded"

@@ -18,6 +18,7 @@ from boss_say_hello.diagnostics import EventLog
 from boss_say_hello.domain import RunEvent, RunSnapshot
 from boss_say_hello.resume.service import ResumeService
 from boss_say_hello.runs.control import Clock
+from boss_say_hello.runtime.control import RunStartBlocked
 from boss_say_hello.storage.companies import CompanyCache
 from boss_say_hello.storage.credentials import (
     CredentialStore,
@@ -173,9 +174,13 @@ class Backend:
         service = ResumeService(self.store, None)
         # Resolve against the stored source, not a caller-supplied replacement PDF text.
         source = self.store.get_resume(version.id)
-        draft = service.revise(source, keywords, summary)
+        draft = service.revise(source, keywords, summary, persist=False)
         confirmed = service.confirm(draft)
-        self.draft_path.unlink(missing_ok=True)
+        try:
+            self.draft_path.unlink(missing_ok=True)
+        except OSError as exc:
+            # Its old source_id cannot override the newly confirmed version on load.
+            self.log.record("resume.draft.cleanup_failed", level="WARNING", error_type=type(exc).__name__)
         self.notice("resume", version=confirmed, generation=generation)
 
     async def open_login(self):
@@ -193,6 +198,32 @@ class Backend:
                 caps=await self.browser.capabilities(),
                 attachments=await self.browser.attachments(),
             )
+            if not self.busy:
+                await self.refresh_expectations()
+        else:
+            self.notice("expectations", account_id=None, items=[])
+
+    async def refresh_expectations(self):
+        if self.busy:
+            raise ValueError("请结束本轮后再刷新求职标签")
+        session = await self.browser.session()
+        self.notice("session", session=session)
+        self.notice("expectations", account_id=session.account_id, items=[])
+        if not session.logged_in or not session.account_id:
+            raise ValueError("请先登录 BOSS，再刷新已有求职标签")
+        items = await self.browser.existing_expectations()
+        current = await self.browser.session()
+        if not current.logged_in or current.account_id != session.account_id:
+            self.notice("session", session=current)
+            self.notice("expectations", account_id=None, items=[])
+            raise ValueError("登录账号已变化，请重新检查登录状态")
+        self.notice("expectations", account_id=session.account_id, items=items)
+        self.notice(
+            "notice",
+            message=f"已读取 {len(items)} 个求职标签，请从下拉框选择"
+            if items
+            else "未读到求职标签，请在 BOSS 打开岗位推荐页，确认已有求职期望后点击刷新标签",
+        )
 
     async def load_history(self, run_id):
         self.export_history()
@@ -217,8 +248,11 @@ class Backend:
             if config.auto_send:
                 caps = await self.browser.capabilities()
                 if caps.initial_contact_behavior == "unknown" or not caps.greeting_limit:
-                    raise ValueError("平台首次沟通行为或长度限制未核实，请关闭自动发送后运行预览")
-                if caps.initial_contact_behavior == "default_message":
+                    raise RunStartBlocked(
+                        "send_capabilities_unknown",
+                        "本轮尚未启动：当前 BOSS 页面未能核实首次沟通行为或消息长度限制。请关闭「自动发送」后运行预览；未发送消息。",
+                    )
+                if caps.initial_contact_behavior in {"default_message", "may_default_message"}:
                     control.default_message_required.set()
                     control.pause_requested.set()
                 if config.send_attachment and config.attachment_id not in {
@@ -247,11 +281,17 @@ class Backend:
             )
             await AgentEngine(executor, ai).run()
         finally:
-            if ai:
-                await ai.close()
-            if search:
-                await search.close()
-            self.busy = False
+            try:
+                if ai:
+                    await ai.close()
+            finally:
+                try:
+                    if search:
+                        await search.close()
+                finally:
+                    self.browser.release_run()
+                    self.busy = False
+                    self.log.record("run.cleaned")
 
     async def close(self):
         try:

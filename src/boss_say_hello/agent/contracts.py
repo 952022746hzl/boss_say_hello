@@ -4,6 +4,15 @@ from boss_say_hello.ai.schemas import AiFailure, strings, text
 from boss_say_hello.domain import Assessment
 
 
+class EligibilityBlocked(ValueError):
+    """Expected business outcome, not a model/network/program failure."""
+
+    def __init__(self, job_id, result):
+        super().__init__(result["reason"])
+        self.job_id = job_id
+        self.result = result
+
+
 def validate_agent_goal(config):
     config.validate(ready=True)
     if not config.target_title.strip():
@@ -11,7 +20,7 @@ def validate_agent_goal(config):
     if len(config.cities) != 1:
         raise ValueError("自主运行每轮请选择一个工作城市")
     if config.salary_min is None or config.salary_max is None:
-        raise ValueError("同步求职期望前请填写完整薪资区间")
+        raise ValueError("筛选岗位前请填写完整薪资区间")
 
 
 @dataclass(frozen=True)

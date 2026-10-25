@@ -12,6 +12,7 @@ from boss_say_hello.browser.port import (
     AttachmentInfo,
     BrowserCapabilities,
     BrowserFailure,
+    JobUnavailable,
     SessionInfo,
 )
 from boss_say_hello.diagnostics import failure, record
@@ -45,11 +46,13 @@ def parse_job(account_id, card, detail):
         detail.get("company_id", ""),
         detail.get("company_full_name", ""),
         detail.get("company_url", ""),
+        detail.get("recruiter_name", ""),
     )
 
 
 class NodriverAdapter:
     poll_attempts = 5
+    editor_poll_attempts = 20
 
     def __init__(self):
         self.browser = None
@@ -59,59 +62,95 @@ class NodriverAdapter:
         self.control = None
         self.preference_state = None
         self.goal = None
-        self.preference_submitted = False
         self.candidate_seen = set()
-        self.expectations_seen = set()
 
     def bind_goal(self, config):
         self.goal = config
         self.preference_state = None
-        self.preference_submitted = False
         self.candidate_seen = set()
-        self.expectations_seen = set()
+
+    def release_run(self):
+        self.goal = None
+        self.control = None
+        self.preference_state = None
+        self.candidate_seen.clear()
+        self.active_job = None
+        self.detail_tab = None
 
     async def preference_snapshot(self):
         from boss_say_hello.browser.preferences import SNAPSHOT
 
         self.preference_state = await self.evaluate(self.list_tab, SNAPSHOT)
-        from boss_say_hello.browser.preferences import compact
-
-        self.expectations_seen.update(
-            compact(e["label"]) for e in self.preference_state.get("expectations", [])
+        record(
+            "browser.preference.snapshot",
+            level="DEBUG",
+            document=self.preference_state.get("document"),
+            path=self.preference_state.get("path"),
+            controls=self.preference_state.get("controls", []),
+            selected=[e["label"] for e in self.preference_state.get("expectations", []) if e["selected"]],
         )
         return self.preference_state
 
-    async def preference_action(self, action, option_id, value=None):
-        from boss_say_hello.browser.preferences import action_script, compact, expectation_form_matches
+    async def existing_expectations(self):
+        from boss_say_hello.browser.preferences import EXISTING_EXPECTATIONS, parse_expectations
+
+        return parse_expectations(await self.evaluate(self.list_tab, EXISTING_EXPECTATIONS))
+
+    async def preference_action(self, option_id):
+        from boss_say_hello.browser.preferences import action_script
 
         self.guard()
         if self.goal is None or self.preference_state is None:
-            raise BrowserFailure("请先读取本轮平台筛选控件")
+            raise BrowserFailure("请先读取本轮求职标签控件")
         options = [c for c in self.preference_state["controls"] if c["id"] == option_id]
-        if len(options) != 1 or action != options[0]["kind"]:
-            raise BrowserFailure("控件已变化或操作类型不匹配")
+        if len(options) != 1:
+            record("browser.preference.stale", level="WARNING", code="stale_control")
+            current = await self.preference_snapshot()
+            current["action_result"] = {
+                "status": "stale_control",
+                "message": "控件 ID 已过期或不存在，本次未操作；请使用本次返回的新控件 ID",
+            }
+            return current
         option = options[0]
-        guard_form = None
-        if action == "input" and value not in {self.goal.target_title, self.goal.cities[0]}:
-            raise BrowserFailure("输入内容必须来自本轮职位或城市")
-        if option.get("submit", option["label"] in {"完成", "保存"}):
-            target = compact(f"{self.goal.target_title}({self.goal.cities[0]})")
-            if target in self.expectations_seen or any(
-                compact(e["label"]) == target for e in self.preference_state.get("expectations", [])
-            ):
-                raise BrowserFailure("已有相同职位和城市的期望，请复用并核对，不重复新增")
-            if not self.preference_state.get("adding") or self.preference_submitted:
-                raise BrowserFailure("仅可新增一次已核实的求职期望；未知结果请先核对")
-            if not expectation_form_matches(self.preference_state["form_values"], self.goal):
-                raise BrowserFailure("期望字段与配置不一致，不能保存")
-            guard_form = self.preference_state["form_values"]
-            self.preference_submitted = True
+        started = time.monotonic()
+        record(
+            "browser.preference.started",
+            action=option["kind"],
+            control_label=option["label"],
+            control_id=option_id,
+        )
         self.guard()
-        result = await self.evaluate(self.list_tab, action_script(option_id, value, guard_form))
+        result = await self.evaluate(self.list_tab, action_script(option_id))
         if not result.get("acted"):
-            raise BrowserFailure("控件已失效，未执行操作")
+            record(
+                "browser.preference.stale",
+                level="WARNING",
+                code="control_unavailable",
+                control_label=option["label"],
+            )
+            current = await self.preference_snapshot()
+            current["action_result"] = {
+                "status": "control_unavailable",
+                "message": "控件已隐藏、遮挡或发生变化，本次未操作；请核对最新页面",
+            }
+            return current
         await asyncio.sleep(0.4)
-        return await self.preference_snapshot()
+        record(
+            "browser.preference.verify",
+            action=option["kind"],
+            control_label=option["label"],
+            control_id=option_id,
+        )
+        current = await self.preference_snapshot()
+        current["action_result"] = {"status": "observed", "action": option["kind"], "label": option["label"]}
+        record(
+            "browser.preference.completed",
+            action=option["kind"],
+            control_label=option["label"],
+            count=len(current["controls"]),
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return current
 
     async def verify_preferences(self, receipt):
         from boss_say_hello.browser.preferences import preferences_match
@@ -121,8 +160,6 @@ class NodriverAdapter:
             self.goal
             and current["document"] == receipt.get("document")
             and current.get("path") == receipt.get("path")
-            and {f["field"]: f["selected"] for f in current.get("filters", [])}
-            == {f["field"]: f["selected"] for f in receipt.get("filters", [])}
             and preferences_match(current, self.goal)
         )
 
@@ -132,7 +169,7 @@ class NodriverAdapter:
             "id": raw.get("company_id", ""),
             "name": raw.get("company_full_name") or raw.get("company") or job.company,
             "city": job.city,
-            "url": raw.get("company_url") or job.url,
+            "url": raw.get("company_url") or "",
             "text": raw.get("company_text", ""),
         }
 
@@ -148,32 +185,175 @@ class NodriverAdapter:
         raw = await self.read_detail(job.url)
         return parse_job(session.account_id, {"url": job.url}, raw)
 
+    @staticmethod
+    def send_block_reason(code):
+        return {
+            "target_changed": "目标会话已变化，未发送",
+            "draft_empty": "填写后输入框再次变空，未发送；请核对页面",
+            "draft_changed": "输入框内容与本次草稿不同，已停止且未覆盖内容",
+            "existing_draft": "输入框已有其他草稿，未覆盖、未发送",
+            "input_limit_unverified": "输入框或长度限制无法核实，未发送",
+            "send_control_not_ready": "等待发送按钮就绪超时，未点击发送",
+            "send_control_unverified": "无法唯一核实发送按钮，未发送",
+            "matching_message_appeared": "观察到新增的同文消息，已停止自动操作以避免重复发送；结果待核实",
+        }.get(code, "页面控件或目标身份无法核实，未执行")
+
+    def blocked_send(self, code):
+        return ActionResult(
+            "unknown" if code == "matching_message_appeared" else "failed", self.send_block_reason(code)
+        )
+
+    async def wait_message_ready(self, job, value, baseline_ids):
+        stable = 0
+        refilled = False
+        for index in range(self.editor_poll_attempts):
+            self.guard()
+            state = await self.evaluate(
+                self.detail_tab, script("message_ready", job, value, baseline_ids=baseline_ids)
+            )
+            record(
+                "browser.editor.wait",
+                level="DEBUG",
+                job_id=job.id,
+                poll=index + 1,
+                **{
+                    k: state.get(k)
+                    for k in ("ready", "code", "matched", "text_matches", "button_enabled", "char_count")
+                },
+            )
+            if state.get("ready"):
+                stable += 1
+                if stable >= 2:
+                    return None
+            else:
+                stable = 0
+                code = state.get("code")
+                if code == "draft_empty" and not refilled:
+                    self.guard()
+                    record("browser.editor.refill", job_id=job.id)
+                    filled = await self.evaluate(
+                        self.detail_tab, script("fill_message", job, value, baseline_ids=baseline_ids)
+                    )
+                    refilled = True
+                    if not filled.get("filled"):
+                        return self.blocked_send(filled.get("code"))
+                elif code != "send_control_not_ready":
+                    return self.blocked_send(code)
+            if index + 1 < self.editor_poll_attempts:
+                await asyncio.sleep(0.25)
+        return ActionResult("failed", self.send_block_reason("send_control_not_ready"))
+
     async def _action(self, job, action, value=""):
         self.guard()
         session = await self.session()
         if not session.logged_in or session.account_id != job.account_id:
-            return ActionResult("failed", "当前账号不匹配，未执行")
+            return ActionResult("failed", "当前账号不匹配，未执行", attempted=False)
         observe = "observe_attachment" if action == "attachment" else "observe"
-        before = {"count": 0}
+        before = {"count": 0, "seen_ids": []}
+        old_tabs = {t.target_id for t in self.browser.tabs} if self.browser else set()
         if action != "contact":
             before = await self.evaluate(self.detail_tab, script(observe, job, value))
             if not before.get("matched"):
                 return ActionResult("failed", "无法核实目标会话，未执行")
+        if action == "message":
+            self.guard()
+            record("browser.delivery.started", action="fill_message", job_id=job.id, char_count=len(value))
+            filled = await self.evaluate(
+                self.detail_tab, script("fill_message", job, value, baseline_ids=before.get("seen_ids", []))
+            )
+            if not filled.get("filled"):
+                record("browser.editor.wait", level="DEBUG", job_id=job.id, code=filled.get("code"))
+                return self.blocked_send(filled.get("code"))
+            blocked = await self.wait_message_ready(job, value, before.get("seen_ids", []))
+            if blocked:
+                return blocked
         self.guard()
-        clicked = await self.evaluate(self.detail_tab, script(action, job, value))
-        if not clicked.get("clicked"):
-            return ActionResult("failed", "页面控件或目标身份无法核实，未执行")
-        for index in range(self.poll_attempts):
-            evidence = await self.evaluate(self.detail_tab, script(observe, job, value))
-            if evidence.get("matched") and (
-                action == "contact" or evidence.get("count", 0) > before.get("count", 0)
-            ):
-                return ActionResult(
-                    "succeeded", "已核实目标会话" if action == "contact" else "已观察到新增的己方消息"
+        session = await self.session()
+        if not session.logged_in or session.account_id != job.account_id:
+            return ActionResult("failed", "当前账号不匹配，未执行", attempted=False)
+        self.guard()
+        operation = "send_message" if action == "message" else action
+        record("browser.delivery.started", action=operation, job_id=job.id)
+        clicked = await self.evaluate(
+            self.detail_tab,
+            script(
+                operation,
+                job,
+                value,
+                baseline_ids=before.get("seen_ids", []) if action == "message" else None,
+            ),
+        )
+        if not isinstance(clicked, dict) or type(clicked.get("clicked")) is not bool:
+            return ActionResult("unknown", "点击回执缺失或格式异常，结果待核实；不会自动重发")
+        if clicked["clicked"] is False:
+            record(
+                "browser.delivery.observed",
+                level="DEBUG",
+                job_id=job.id,
+                action=operation,
+                clicked=False,
+                code=clicked.get("code"),
+            )
+            blocked = self.blocked_send(clicked.get("code"))
+            return ActionResult(blocked.outcome, blocked.detail, attempted=False)
+        continued = False
+        attempts = (
+            max(self.poll_attempts, 100 if action == "contact" else 40)
+            if self.browser
+            else self.poll_attempts
+        )
+        for index in range(attempts):
+            # Contact may already have sent the platform greeting: never release its reservation.
+            if self.control.pause_requested.is_set() or self.control.closing.is_set():
+                return ActionResult("unknown", "操作后任务暂停，结果待核实；不会自动重发")
+            candidates = [self.detail_tab]
+            if action == "contact" and self.browser:
+                await self.browser.update_targets()
+                candidates.extend(
+                    t
+                    for t in self.browser.tabs
+                    if t.target_id not in old_tabs
+                    and t is not self.detail_tab
+                    and urlparse(t.url).hostname in {"www.zhipin.com", "zhipin.com"}
                 )
-            if index + 1 < self.poll_attempts:
+            for tab in candidates:
+                evidence = await self.evaluate(tab, script(observe, job, value))
+                record(
+                    "browser.delivery.observed",
+                    level="DEBUG",
+                    job_id=job.id,
+                    action=action,
+                    poll=index + 1,
+                    matched=evidence.get("matched"),
+                    count=evidence.get("count"),
+                    before_count=before.get("count"),
+                )
+                if evidence.get("matched") and (
+                    (action == "contact" and evidence.get("input_ready", True))
+                    or (
+                        action != "contact"
+                        and bool(set(evidence.get("ids", [])) - set(before.get("seen_ids", [])))
+                    )
+                ):
+                    self.detail_tab = tab
+                    record("browser.delivery.completed", job_id=job.id, action=action, status="succeeded")
+                    return ActionResult(
+                        "succeeded",
+                        "已核实目标岗位与招聘者会话"
+                        if action == "contact"
+                        else "已观察到新增己方消息及平台送达标记",
+                    )
+                if action == "contact" and evidence.get("can_continue") and not continued:
+                    if self.control.pause_requested.is_set() or self.control.closing.is_set():
+                        return ActionResult("unknown", "首次联系后暂停，未继续操作；结果待核实")
+                    record("browser.delivery.started", action="continue_contact", job_id=job.id)
+                    result = await self.evaluate(tab, script("continue_contact", job))
+                    continued = bool(result.get("clicked"))
+                    if not continued:
+                        return ActionResult("unknown", "首次联系后弹框状态变化，请手动核实")
+            if index + 1 < attempts:
                 await asyncio.sleep(0.5)
-        return ActionResult("unknown", "已操作，但送达证据不足；不会自动重试")
+        return ActionResult("unknown", "已操作，但目标会话或送达证据不足；不会自动重试")
 
     async def open_contact(self, job):
         return await self._action(job, "contact")
@@ -187,6 +367,30 @@ class NodriverAdapter:
     async def return_to_list(self):
         if self.list_tab is None:
             return False
+        # The site may navigate in the current tab or open a new one.
+        current = await self.evaluate(
+            self.list_tab, "/* LIST_LOCATION */ JSON.stringify({path:location.pathname})"
+        )
+        if current.get("path") not in {"/web/geek/job-recommend", "/web/geek/jobs"}:
+            await self.list_tab.get(dom.RECOMMEND_URL)
+            for _ in range(20):
+                if (await self.preference_snapshot()).get("expectations"):
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                return False
+        if self.goal:
+            from boss_say_hello.browser.preferences import compact, preferences_match
+
+            observed = await self.preference_snapshot()
+            if not preferences_match(observed, self.goal):
+                label = compact(f"{self.goal.target_title}({self.goal.cities[0]})")
+                controls = [c for c in observed.get("controls", []) if compact(c["label"]) == label]
+                if len(controls) != 1:
+                    return False
+                observed = await self.preference_action(controls[0]["id"])
+                if not preferences_match(observed, self.goal):
+                    return False
         await self.list_tab.activate()
         return True
 
@@ -290,15 +494,20 @@ class NodriverAdapter:
             await asyncio.sleep(1)
         raise BrowserFailure("列表未继续加载，无法确认是否到底，请检查页面")
 
-    async def open_preferences(self, destination):
+    async def current_candidate_ids(self):
+        for attempt in range(self.poll_attempts):
+            self.guard()
+            snapshot = await self.evaluate(self.list_tab, dom.CARDS)
+            ids = {job_id(c.get("url", "")) for c in snapshot.get("cards", [])} - {""}
+            if ids or snapshot.get("ended"):
+                return ids
+            if attempt + 1 < self.poll_attempts:
+                await asyncio.sleep(0.5)
+        raise BrowserFailure("刷新后的推荐列表尚未加载，无法同步候选岗位")
+
+    async def open_preferences(self):
         self.guard()
-        urls = {
-            "recommendations": dom.RECOMMEND_URL,
-            "expectations": "https://www.zhipin.com/web/geek/resume/",
-        }
-        if destination not in urls:
-            raise BrowserFailure("不支持的页面")
-        await self.list_tab.get(urls[destination])
+        await self.list_tab.get(dom.RECOMMEND_URL)
         await asyncio.sleep(1)
         return await self.preference_snapshot()
 
@@ -308,6 +517,10 @@ class NodriverAdapter:
         # Current BOSS uses an in-list detail pane. Standalone SEO pages omit
         # reliable recruiter identity and contact state, so do not use them.
         if not await self.evaluate(self.list_tab, dom.select_job(url)):
+            snapshot = await self.evaluate(self.list_tab, dom.CARDS)
+            ids = {job_id(card.get("url", "")) for card in snapshot.get("cards", [])} - {""}
+            if ids and job_id(url) not in ids:
+                raise JobUnavailable("岗位已不在当前推荐列表，本轮跳过并继续处理其他岗位")
             raise BrowserFailure("当前推荐列表中找不到此岗位，请重新加载推荐页")
         self.detail_tab = self.list_tab
         for _ in range(20):
@@ -331,7 +544,11 @@ class NodriverAdapter:
         if self.detail_tab is None and self.list_tab is None:
             return BrowserCapabilities(None, "unknown")
         raw = await self.evaluate(self.detail_tab or self.list_tab, dom.CAPABILITIES)
-        return BrowserCapabilities(raw.get("greeting_limit"), raw.get("initial_contact_behavior", "unknown"))
+        return BrowserCapabilities(
+            raw.get("greeting_limit"),
+            raw.get("initial_contact_behavior", "unknown"),
+            raw.get("limit_source", "editor"),
+        )
 
     async def close(self):
         if self.browser:
