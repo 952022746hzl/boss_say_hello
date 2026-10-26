@@ -6,7 +6,7 @@ from itertools import count
 
 from boss_say_hello.agent.contracts import EligibilityBlocked, validate_agent_goal
 from boss_say_hello.agent.tool_schema import TOOLS
-from boss_say_hello.ai.schemas import AiFailure, decode
+from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted, decode
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure
 from boss_say_hello.browser.preferences import compact, preferences_match
 from boss_say_hello.diagnostics import failure, record, scope
@@ -35,6 +35,18 @@ reason是供用户查看的简短行动说明，不含内部推理。已完成�
 class AgentEngine:
     def __init__(self, executor, ai):
         self.executor, self.ai = executor, ai
+        for client in (ai, executor.ai, executor.search):
+            recovery = getattr(client, "recovery", None)
+            if recovery is not None:
+                recovery.bind(executor.control, executor.clock, self.waiting_for_limit, self.retrying_request)
+
+    def waiting_for_limit(self, stage, seconds, retry):
+        reason = f"模型服务临时限流，等待 {seconds:g} 秒后第 {retry}/2 次重试；可暂停或结束本轮"
+        self.executor.publish("state", status="running", phase="rate_limit_wait", reason=reason)
+
+    def retrying_request(self, stage, retry):
+        reason = f"已发起第 {retry}/2 次重试，正在等待模型服务响应"
+        self.executor.publish("state", status="running", phase="retry_wait", reason=reason)
 
     def available_tools(self):
         ex = self.executor
@@ -247,10 +259,22 @@ class AgentEngine:
                 try:
                     with scope(step=ex.step, phase="model_wait"):
                         message = await self.ai.decide(messages, self.available_tools())
-                except AiFailure:
+                except AiRequestInterrupted:
+                    ex.refund_decision(current_job)
                     if control.closing.is_set():
                         status = "stopped"
                         break
+                    control.pause_requested.set()
+                    continue
+                except AiFailure as exc:
+                    if control.closing.is_set():
+                        status = "stopped"
+                        break
+                    if exc.is_limit:
+                        ex.refund_decision(current_job)
+                        pause_reason = exc.public_message + "；已保留本轮，处理后点击继续本轮"
+                        control.pause_requested.set()
+                        continue
                     raise
                 if control.closing.is_set():
                     status = "stopped"
@@ -275,6 +299,11 @@ class AgentEngine:
                         result = await ex.execute(name, decode(raw))
                         if control.pause_requested.is_set() and result.get("reason"):
                             pause_reason = result["reason"]
+                    except AiRequestInterrupted:
+                        ex.refund_decision(current_job)
+                        blocked = True
+                        control.pause_requested.set()
+                        break
                     except ActionBlocked:
                         blocked = True
                         control.pause_requested.set()
@@ -291,6 +320,12 @@ class AgentEngine:
                         )
                         ex.publish("tool_result", tool=name, job_id=exc.job_id, result=result)
                     except (ValueError, AiFailure, BrowserFailure) as exc:
+                        if isinstance(exc, AiFailure) and exc.is_limit:
+                            ex.refund_decision(current_job)
+                            pause_reason = exc.public_message + "；已保留当前岗位，处理后点击继续本轮"
+                            control.pause_requested.set()
+                            blocked = True
+                            break
                         reason = exc.public_message if isinstance(exc, AiFailure) else str(exc)
                         code = (
                             exc.code
@@ -337,7 +372,8 @@ class AgentEngine:
             raise
         except Exception as exc:
             status = "failed"
-            failure("agent.run.failed", exc, run_id=run.id)
+            details = exc.diagnostic_fields() if isinstance(exc, AiFailure) else {}
+            failure("agent.run.failed", exc, run_id=run.id, **details)
             ex.publish(
                 "error",
                 reason=exc.public_message

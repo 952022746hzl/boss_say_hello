@@ -4,7 +4,7 @@ from dataclasses import asdict
 from boss_say_hello.agent.contracts import EligibilityBlocked, background_decision, combined_assessment
 from boss_say_hello.agent.progress import PHASES, TOOL_LABELS
 from boss_say_hello.agent.tool_schema import DEFINITIONS, TEXT, obj, validate_value
-from boss_say_hello.ai.schemas import parse_assessment
+from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted, parse_assessment
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure, JobUnavailable
 from boss_say_hello.browser.preferences import compact
 from boss_say_hello.diagnostics import record, scope
@@ -312,7 +312,13 @@ class ToolExecutor:
         sources = [s for s in self.cache.get(identity) or [] if s.get("angle") == "overview"]
         if not sources and self.search_counts.get(key, 0) < 1:
             self.search_counts[key] = 1
-            found = await self.search.search(company)
+            try:
+                found = await self.search.search(company)
+            except (AiFailure, AiRequestInterrupted) as exc:
+                if isinstance(exc, AiRequestInterrupted) or exc.is_limit:
+                    self.search_counts.pop(key, None)
+                    self.company_checked.discard(job_id)
+                raise
             sources = [{**source, "angle": "overview"} for source in found]
             if sources:
                 self.cache.put(identity, sources)
@@ -465,6 +471,10 @@ class ToolExecutor:
             return False
         self.job_steps[jid] = steps + 1
         return True
+
+    def refund_decision(self, jid):
+        # Infrastructure limits/pauses did not produce a usable decision or completed tool.
+        self.job_steps[jid] = max(0, self.job_steps.get(jid, 0) - 1)
 
     async def finish(self):
         if self.active_job_id() is not None:

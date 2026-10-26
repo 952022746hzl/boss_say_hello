@@ -1,7 +1,7 @@
 import time
 
 from boss_say_hello.ai.client import AiService, request_failure
-from boss_say_hello.ai.schemas import AiFailure
+from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted
 from boss_say_hello.diagnostics import failure, record
 
 
@@ -18,8 +18,8 @@ class AgentClient(AiService):
             char_count=sum(len(str(m.get("content", ""))) for m in messages),
         )
         try:
-            response = await self.client.chat.completions.create(
-                model=self.config.model, messages=messages, tools=tools, tool_choice="required"
+            response = await self.completion(
+                messages, stage="agent_decision", tools=tools, tool_choice="required"
             )
             choice = response.choices[0]
             if choice.finish_reason in {"length", "content_filter"} or not choice.message.tool_calls:
@@ -41,7 +41,18 @@ class AgentClient(AiService):
                 completion_tokens=getattr(usage, "completion_tokens", None),
             )
             return message
+        except AiRequestInterrupted:
+            raise
         except Exception as exc:
             error = exc if isinstance(exc, AiFailure) else request_failure(exc)
-            failure("ai.request.failed", exc, stage="agent_decision", code=error.code)
+            if error.is_limit:
+                record(
+                    "ai.request.limited",
+                    level="WARNING",
+                    stage="agent_decision",
+                    reason=error.public_message,
+                    **error.diagnostic_fields(),
+                )
+            else:
+                failure("ai.request.failed", exc, stage="agent_decision", **error.diagnostic_fields())
             raise error from None

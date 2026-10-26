@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from boss_say_hello.ai.recovery import RequestRecovery
 from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.diagnostics import record
 from boss_say_hello.storage.credentials import normalize_secret
@@ -46,13 +47,27 @@ class CompanySearch:
             follow_redirects=False,
         )
         self.allowed_urls = set()
+        self.recovery = RequestRecovery()
 
     async def _post(self, operation, payload):
         record("company.search.started", operation=operation)
-        try:
+
+        async def request():
             response = await self.client.post("tools/" + operation, json=payload)
             response.raise_for_status()
             return response.json()
+
+        try:
+            return await self.recovery.call(request, stage="company_" + operation)
+        except AiFailure as exc:
+            record(
+                "ai.request.limited",
+                level="WARNING",
+                stage="company_" + operation,
+                reason=exc.public_message,
+                **exc.diagnostic_fields(),
+            )
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             record(

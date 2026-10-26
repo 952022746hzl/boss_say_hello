@@ -119,3 +119,30 @@ def test_failure_logs_underlying_types_without_exception_messages(tmp_path):
         assert "private-resume" not in json.dumps(entry)
     finally:
         log.close()
+
+
+def test_retry_logs_distinguish_waiting_from_request_in_flight(qtbot, tmp_path):
+    from boss_say_hello.diagnostics import EventLog
+    from boss_say_hello.ui.log_page import LogPage
+
+    page = LogPage()
+    qtbot.addWidget(page)
+    log = EventLog(tmp_path, page.add_entry)
+    try:
+        log.record("ai.retry.wait", level="WARNING", wait_seconds=10, retry=1)
+        log.record("ai.retry.started", stage="agent_decision", retry=1)
+        log.record(
+            "ai.request.limited",
+            level="WARNING",
+            reason="连续限流，已暂停并保留本轮",
+            code="rate_limited",
+            limit_kind="temporary",
+            can_retry=True,
+        )
+        text = page.output.toPlainText()
+        assert "等待 10 秒后第 1/2 次重试" in text
+        assert "已发起第 1/2 次重试，正在等待服务响应" in text
+        assert "连续限流，已暂停并保留本轮" in text
+        assert log.tail()[-1]["fields"]["can_retry"] is True
+    finally:
+        log.close()

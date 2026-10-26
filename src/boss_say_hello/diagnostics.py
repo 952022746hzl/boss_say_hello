@@ -16,6 +16,12 @@ from boss_say_hello.agent.progress import PHASE_LABELS, TOOL_LABELS
 _context = contextvars.ContextVar("boss_diagnostic_fields", default=None)
 _current = contextvars.ContextVar("boss_diagnostics", default=None)
 FIELDS = {
+    "can_retry",
+    "provider_code",
+    "limit_kind",
+    "retry_after_seconds",
+    "wait_seconds",
+    "retry",
     "ready",
     "text_matches",
     "button_enabled",
@@ -75,6 +81,9 @@ FIELDS = {
     "stack",
 }
 MESSAGES = {
+    "ai.retry.started": "已重新发起请求，正在等待服务响应",
+    "ai.retry.wait": "模型服务暂时限流，等待后重试",
+    "ai.request.limited": "模型服务限制请求",
     "browser.editor.wait": "DEBUG｜等待发送控件就绪：核对会话、草稿内容和按钮状态",
     "browser.editor.refill": "输入框在页面加载后变空，重新填写本次草稿一次",
     "greeting.shorten.started": "招呼语超过长度上限，正在请求模型压缩一次",
@@ -204,7 +213,13 @@ class EventLog:
             return
         fields = {k: v for k, v in {**(_context.get() or {}), **fields}.items() if k in FIELDS}
         message = MESSAGES.get(event, event)
-        if event == "run.state" and fields.get("requires_default_ack"):
+        if event == "ai.retry.wait":
+            message = f"模型服务暂时限流，等待 {fields.get('wait_seconds', '?')} 秒后第 {fields.get('retry', '?')}/2 次重试"
+        elif event == "ai.retry.started":
+            message = f"已发起第 {fields.get('retry', '?')}/2 次重试，正在等待服务响应"
+        elif event == "ai.request.limited":
+            message += "：" + fields.get("reason", "请检查账户限制")
+        elif event == "run.state" and fields.get("requires_default_ack"):
             message = "等待发送确认：" + fields.get("reason", "首次联系可能发送平台默认招呼语")
             message += "；请到「岗位与运行」点击「已知晓，继续自动发送」，或结束本轮关闭自动发送后预览"
         elif event == "run.state" and fields.get("status") == "paused":
