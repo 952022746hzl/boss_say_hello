@@ -1,7 +1,8 @@
 import json
 from collections import deque
+from pathlib import Path
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -10,6 +11,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +22,7 @@ class LogPage(QWidget):
         super().__init__()
         self.entries = deque(maxlen=1000)
         self.path = None
+        self.requests = {}
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
         self.level = QComboBox()
@@ -47,10 +50,34 @@ class LogPage(QWidget):
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setMaximumBlockCount(1000)
-        layout.addWidget(self.output)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self.output)
+        detail = QWidget()
+        detail_layout = QVBoxLayout(detail)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.addWidget(QLabel("完整 AI 请求正文（本地文件）"))
+        self.request_selector = QComboBox()
+        self.request_selector.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.request_selector.setMinimumContentsLength(24)
+        self.request_selector.currentIndexChanged.connect(self.show_request)
+        detail_layout.addWidget(self.request_selector)
+        self.request_location = QLabel("尚无完整请求日志")
+        self.request_location.setWordWrap(True)
+        self.request_location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        detail_layout.addWidget(self.request_location)
+        self.request_details = QPlainTextEdit()
+        self.request_details.setReadOnly(True)
+        detail_layout.addWidget(self.request_details)
+        splitter.addWidget(detail)
+        layout.addWidget(splitter)
         self.level.currentTextChanged.connect(self.render)
         layout.addWidget(
-            QLabel("记录阶段、状态、耗时与错误位置；不记录密钥、Cookie、简历/岗位正文或招呼语内容。")
+            QLabel(
+                "进度日志仅保留元数据；完整请求含简历、岗位和提示词，保存在本地 ai_requests；排除密钥与 Cookie。\n"
+                "完整请求最多保留 500 个、合计 100 MB；正在处理的请求保留至完成。"
+            )
         )
 
     def set_location(self, path, entries):
@@ -59,11 +86,50 @@ class LogPage(QWidget):
         self.location.setText(f"本地日志：{self.path} · 5 MB / 文件，最多 5 个备份")
         self.entries.clear()
         self.entries.extend(entries)
+        self.requests.clear()
+        self.request_selector.clear()
+        for entry in self.entries:
+            self._add_request(entry)
         self.render()
 
     def add_entry(self, entry):
         self.entries.append(entry)
+        self._add_request(entry)
         self.render()
+
+    def _add_request(self, entry):
+        fields = entry.get("fields", {})
+        request_id = fields.get("request_id")
+        path = fields.get("request_path")
+        if not request_id or not path:
+            return
+        if request_id not in self.requests:
+            self.requests[request_id] = path
+            self.request_selector.addItem(
+                f"{entry['time']} · {fields.get('stage', 'request')} · {request_id}",
+                request_id,
+            )
+            if len(self.requests) > 500:
+                oldest = self.request_selector.itemData(0)
+                self.requests.pop(oldest, None)
+                self.request_selector.removeItem(0)
+        if self.request_selector.currentData() == request_id:
+            self.show_request()
+
+    def show_request(self):
+        path = self.requests.get(self.request_selector.currentData())
+        if not path:
+            self.request_location.setText("尚无完整请求日志")
+            self.request_details.clear()
+            return
+        path = Path(path)
+        if not path.is_absolute() and self.path:
+            path = Path(self.path) / path
+        self.request_location.setText(f"完整请求文件：{path}")
+        try:
+            self.request_details.setPlainText(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            self.request_details.setPlainText("无法读取完整请求日志：文件可能已清理，或本地目录不可访问。")
 
     def render(self):
         level = self.level.currentText()
@@ -94,6 +160,9 @@ class LogPage(QWidget):
     def clear_view(self):
         self.entries.clear()
         self.output.clear()
+        self.requests.clear()
+        self.request_selector.clear()
+        self.show_request()
 
     def open_folder(self):
         if self.path:

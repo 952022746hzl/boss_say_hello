@@ -1,4 +1,3 @@
-import json
 from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -8,45 +7,19 @@ import pytest
 from boss_say_hello.agent.engine import AgentEngine
 from boss_say_hello.browser.port import ActionResult
 from boss_say_hello.domain import AppConfig, Greeting, RunEvent
-from tests.test_agent_engine import assessment_args, environment, prepare
+from tests.test_agent_engine import environment, evaluator
 
 
-def decision(name, **args):
-    return {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "id": "a",
-                "type": "function",
-                "function": {"name": name, "arguments": json.dumps({"reason": "合成测试", **args})},
-            }
-        ],
-    }
-
-
-async def test_early_finish_is_hidden_and_rejected(config, snapshot, job, storage, tmp_path):
-    ex, *_ = environment(config, snapshot, job, storage, tmp_path)
-    await prepare(ex)
-    assert "finish" not in {t["function"]["name"] for t in AgentEngine(ex, None).available_tools()}
-    with pytest.raises(ValueError, match="尚未"):
-        await ex.execute("finish", {"reason": "错误地认为工具不可用"})
-    assert not ex.finished
-    ex.done.add("j1")
-    ex.list_ended = False
-    with pytest.raises(ValueError, match="更多"):
-        await ex.finish()
-    ex.list_ended = True
-    assert (await ex.finish())["status"] == "finished"
-
-
-async def test_repeated_early_finish_uses_only_twelve_decisions_per_job(
+async def test_model_cannot_end_round_before_remaining_jobs_are_evaluated(
     config, snapshot, job, storage, tmp_path
 ):
     ex, browser, _, delivery, _ = environment(config, snapshot, job, storage, tmp_path)
     browser.candidate_batch.return_value = {"jobs": [job(), job(id="j2")], "ended": True}
-    ai = SimpleNamespace(decide=AsyncMock(return_value=decision("finish")))
+    browser.refresh_job.side_effect = lambda j: j
+    ai = evaluator()
+    ai.evaluate_job.return_value = {"action": "finish"}
     await AgentEngine(ex, ai).run()
-    assert ai.decide.await_count == 24
+    assert ai.evaluate_job.await_count == 4  # Each job gets one bounded format correction.
     assert ex.done == {"j1", "j2"}
     assert storage.events(ex.run.id)[-1].payload["status"] == "completed"
     delivery.deliver.assert_not_called()
@@ -56,7 +29,7 @@ async def test_150_successes_continue_past_failures_and_old_limits(config, snaps
     ex, browser, search, delivery, _ = environment(
         config, snapshot, job, storage, tmp_path, auto_send=True, max_contacts=150
     )
-    from tests.test_engine import FakeClock
+    from tests.fakes.clock import FakeClock
 
     ex.clock = FakeClock()
     jobs = [job(id=f"j{i}") for i in range(155)]
@@ -91,21 +64,12 @@ async def test_150_successes_continue_past_failures_and_old_limits(config, snaps
 
     delivery.deliver.side_effect = delivered
 
-    async def choose(messages, tools):
-        names = {t["function"]["name"] for t in tools}
-        for name in ("read_job", "search_company", "assess_job", "draft_greeting", "send_greeting"):
-            if name in names:
-                args = {"job_id": ex.active_job_id()}
-                if name == "assess_job":
-                    args = {**assessment_args(), **args}
-                return decision(name, **args)
-        return decision("finish")
-
-    ai = SimpleNamespace(decide=AsyncMock(side_effect=choose))
+    ai = evaluator()
     await AgentEngine(ex, ai).run()
     assert delivery.deliver.await_count == 152
     assert ex.journal.contact_count(ex.run.id) == 152
-    assert ai.decide.await_count == 760
+    assert ai.evaluate_job.await_count == 152
+    assert ex.ai.greet.await_count == 152
     assert search.search.await_count == 1  # Same company sources reused, every job assessed again.
     assert len(ex.assessments) == 0  # Completed contexts are cleaned on list return.
     assert sum(e.kind == "assessment" for e in storage.events(ex.run.id)) == 152
@@ -174,11 +138,11 @@ async def test_empty_page_is_not_reported_as_exhausted_before_confirmation(
             ex.control.pause_requested.clear()
 
     ex.emit = resume
-    ai = SimpleNamespace(decide=AsyncMock(return_value=decision("skip_job", job_id="j1")))
+    ai = evaluator("suspected")
     await AgentEngine(ex, ai).run()
     assert len(paused) == 1
     assert "未发现新岗位" in paused[0].payload["reason"]
-    assert ai.decide.await_count == 1
+    assert ai.evaluate_job.await_count == 1
     assert "j1" in ex.done
     assert storage.events(ex.run.id)[-1].payload["status"] == "completed"
     delivery.deliver.assert_not_called()
@@ -249,9 +213,9 @@ async def test_paused_delivery_refreshes_progress_before_waiting(
             ex.control.closing.set()
 
     ex.emit = stop_on_pause
-    ai = SimpleNamespace(decide=AsyncMock(return_value=decision("send_greeting", job_id="j1")))
+    ai = evaluator()
     await AgentEngine(ex, ai).run()
     assert at_pause and at_pause[0]["successes"] == successes
     assert at_pause[0]["contacts"] == 1
     assert not ex.journal.eligible(ex.run.account_id, "j1")
-    assert ai.decide.await_count == 1
+    ai.evaluate_job.assert_not_called()

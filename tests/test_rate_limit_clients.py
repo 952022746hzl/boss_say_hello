@@ -8,7 +8,7 @@ from boss_say_hello.ai.client import AiService
 from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.diagnostics import EventLog
 from boss_say_hello.domain import Assessment
-from tests.test_engine import FakeClock
+from tests.fakes.clock import FakeClock
 
 PRIVATE_MESSAGE = "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE"
 PRIVATE_BODY = "SYNTHETIC_PRIVATE_RESPONSE_BODY"

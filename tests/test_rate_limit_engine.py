@@ -10,26 +10,10 @@ from boss_say_hello.agent.engine import AgentEngine
 from boss_say_hello.ai.agent_client import AgentClient
 from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted
 from boss_say_hello.domain import Greeting
-from tests.test_agent_engine import assessment_args, environment, prepare
-from tests.test_engine import FakeClock
+from tests.fakes.clock import FakeClock
+from tests.test_agent_engine import assessment_args, environment, evaluation_payload, prepare
 
 LIMIT_MESSAGE = "请求受到限制，请稍后继续本轮"
-
-
-def decision(name, **args):
-    return {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "id": name,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps({"reason": "合成测试决策", **args}),
-                },
-            }
-        ],
-    }
 
 
 def observe_pauses(executor):
@@ -67,7 +51,7 @@ async def test_decision_limit_keeps_run_and_job_until_user_stops(config, snapsho
     ex.clock = FakeClock()
     run = ex.run
     pauses = observe_pauses(ex)
-    ai = SimpleNamespace(decide=AsyncMock(side_effect=AiFailure("rate_limited", LIMIT_MESSAGE)))
+    ai = SimpleNamespace(evaluate_job=AsyncMock(side_effect=AiFailure("rate_limited", LIMIT_MESSAGE)))
     task = asyncio.create_task(AgentEngine(ex, ai).run())
     try:
         paused = await next_pause(task, pauses)
@@ -92,9 +76,9 @@ async def test_repeated_decision_limits_do_not_spend_job_budget_before_resume(
     ex.clock = FakeClock()
     pauses = observe_pauses(ex)
     ai = SimpleNamespace(
-        decide=AsyncMock(
+        evaluate_job=AsyncMock(
             side_effect=[AiFailure("rate_limited", LIMIT_MESSAGE) for _ in range(13)]
-            + [decision("skip_job", job_id="j1")]
+            + [evaluation_payload("suspected")]
         )
     )
     task = asyncio.create_task(AgentEngine(ex, ai).run())
@@ -131,13 +115,7 @@ async def test_draft_limits_preserve_assessment_and_resume_to_one_delivery(
         AiFailure("rate_limited", LIMIT_MESSAGE),
         Greeting("你好，我有 Python 开发经验，希望进一步交流。"),
     ]
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            side_effect=lambda *_: decision(
-                "send_greeting" if "j1" in ex.greetings else "draft_greeting", job_id="j1"
-            )
-        )
-    )
+    ai = SimpleNamespace()
     pauses = observe_pauses(ex)
     task = asyncio.create_task(AgentEngine(ex, ai).run())
     try:
@@ -203,7 +181,17 @@ async def test_agent_client_retries_transient_429_in_same_decision_without_repea
             )
         return httpx.Response(
             200,
-            json={"choices": [{"finish_reason": "tool_calls", "message": decision("skip_job", job_id="j1")}]},
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(evaluation_payload("suspected")),
+                        },
+                    }
+                ]
+            },
         )
 
     ai = AgentClient(ex.run.config, "test-key", httpx.MockTransport(respond))
@@ -247,7 +235,17 @@ async def test_http_limit_pauses_at_retry_budget_and_manual_resume_keeps_same_jo
             return httpx.Response(429, json={"error": provider_error})
         return httpx.Response(
             200,
-            json={"choices": [{"finish_reason": "tool_calls", "message": decision("skip_job", job_id="j1")}]},
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(evaluation_payload("suspected")),
+                        },
+                    }
+                ]
+            },
         )
 
     ai = AgentClient(ex.run.config, "test-key", httpx.MockTransport(respond))
@@ -334,7 +332,17 @@ async def test_pause_during_http_retry_wait_resumes_same_job_without_spending_bu
             )
         return httpx.Response(
             200,
-            json={"choices": [{"finish_reason": "tool_calls", "message": decision("skip_job", job_id="j1")}]},
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(evaluation_payload("suspected")),
+                        },
+                    }
+                ]
+            },
         )
 
     ai = AgentClient(ex.run.config, "test-key", httpx.MockTransport(respond))

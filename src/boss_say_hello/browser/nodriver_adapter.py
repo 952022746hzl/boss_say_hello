@@ -441,30 +441,6 @@ class NodriverAdapter:
                 self.control.pause_requested.set()
             record("browser.closed")
 
-    async def iter_recommended(self):
-        seen = set()
-        misses = 0
-        while True:
-            session = await self.session()
-            if not session.logged_in or not session.account_id:
-                raise BrowserFailure("登录失效或无法核实当前账号标识，请重新检查登录")
-            snapshot = await self.evaluate(self.list_tab, dom.CARDS)
-            fresh = [card for card in snapshot.get("cards", []) if card.get("url") not in seen]
-            for card in fresh:
-                seen.add(card.get("url"))
-                if not job_id(card.get("url", "")):
-                    yield parse_job(session.account_id, card, {})
-                    continue
-                detail = await self.read_detail(card["url"])
-                yield parse_job(session.account_id, card, detail)
-            if snapshot.get("ended"):
-                return
-            misses = 0 if fresh else misses + 1
-            if misses >= self.poll_attempts:
-                raise BrowserFailure("推荐列表未继续加载，无法确认是否到底；本轮已停止")
-            await self.evaluate(self.list_tab, dom.SCROLL)
-            await asyncio.sleep(1)
-
     async def candidate_batch(self):
         session = await self.session()
         if not session.logged_in or not session.account_id:
@@ -498,12 +474,6 @@ class NodriverAdapter:
             if attempt + 1 < self.poll_attempts:
                 await asyncio.sleep(0.5)
         raise BrowserFailure("刷新后的推荐列表尚未加载，无法同步候选岗位")
-
-    async def open_preferences(self):
-        self.guard()
-        await self.list_tab.get(dom.RECOMMEND_URL)
-        await asyncio.sleep(1)
-        return await self.preference_snapshot()
 
     async def read_detail(self, url):
         if not job_id(url):

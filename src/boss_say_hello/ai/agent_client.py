@@ -1,58 +1,56 @@
-import time
+"""A single combined job/company evaluation, without browser-action decisions."""
 
-from boss_say_hello.ai.client import AiService, request_failure
-from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted
-from boss_say_hello.diagnostics import failure, record
+import json
+from dataclasses import asdict
+
+from boss_say_hello.agent.tool_schema import ASSESSMENT, BACKGROUND, obj, validate_value
+from boss_say_hello.ai.client import AiService
+from boss_say_hello.ai.prompts import BOUNDARY
+from boss_say_hello.ai.schemas import AiFailure, decode
+
+EVALUATION_SCHEMA = obj({"assessment": ASSESSMENT, "background": BACKGROUND})
+EVALUATION_PROMPT = """仅根据当前岗位、已确认简历和本次提供的公司资料，完成一次综合评估。
+岗位匹配分与公司背景分分别为0—100，综合分由程序计算。偏好和评分提示词仅用于评估，明确配置优先。
+核对公司名称、城市、业务及平台主体线索，同名不能混同；当前岗位的用工性质须重新判断，不沿用缓存结论。
+外包检查开启时，有资料支持的外包/驻场/派遣嫌疑标suspected，即使岗位声称直招；明确外包标confirmed。
+没有搜到外包信息不等于clear；公司身份或岗位用工证据不足时相应布尔值为false，外包类别标unknown。
+关闭外包检查只取消该项排除，仍核对主体和经营风险。背景source_ids只能引用本次提供的source_ids，不要填写网址、岗位ID或序号。
+不执行或决定页面操作，不生成招呼语，不发送消息。reason仅写供用户查看的简短依据，不写内部推理。
+仅返回与给定JSON结构完全一致的对象，不要Markdown或额外字段。
+"""
 
 
 class AgentClient(AiService):
-    async def decide(self, messages, tools):
-        started = time.monotonic()
-        record("ai.request.started", stage="agent_decision", message_count=len(messages))
-        record(
-            "ai.request.details",
-            level="DEBUG",
-            model=self.config.model,
-            tool_count=len(tools),
-            message_count=len(messages),
-            char_count=sum(len(str(m.get("content", ""))) for m in messages),
-        )
+    async def evaluate_job(self, run, job, company, sources, *, correction=None):
+        config = run.config
+        context = {
+            "明确配置": {
+                "cities": config.cities,
+                "salary_min": config.salary_min,
+                "salary_max": config.salary_max,
+                "outsourcing_check": config.outsourcing_check,
+                "background_weight": config.background_weight,
+            },
+            "求职偏好": config.prompts.preference,
+            "评分标准": config.prompts.scoring,
+            "已确认简历": {"keywords": run.resume.keywords, "summary": run.resume.summary},
+            "当前岗位": asdict(job),
+            "公司主体线索": company,
+            "公司资料": sources,
+            "source_ids": sorted({s["id"] for s in sources if s.get("text") and s.get("url")}),
+        }
+        if correction:
+            context["上次校验反馈"] = correction
+        messages = [
+            {
+                "role": "system",
+                "content": BOUNDARY + EVALUATION_PROMPT + json.dumps(EVALUATION_SCHEMA, ensure_ascii=False),
+            },
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ]
+        result = decode(await self._request(messages, stage="assessment"))
         try:
-            response = await self.completion(
-                messages, stage="agent_decision", tools=tools, tool_choice="required"
-            )
-            choice = response.choices[0]
-            if choice.finish_reason in {"length", "content_filter"} or not choice.message.tool_calls:
-                raise AiFailure("invalid_decision", "模型未返回完整工具决策，本轮停止")
-            # Kimi requires the original reasoning/tool-call message on subsequent turns.
-            message = choice.message.model_dump(exclude_none=True)
-            record(
-                "ai.request.succeeded",
-                stage="agent_decision",
-                duration_ms=round((time.monotonic() - started) * 1000),
-            )
-            usage = getattr(response, "usage", None)
-            record(
-                "ai.decision.details",
-                level="DEBUG",
-                finish_reason=choice.finish_reason,
-                tool_names=[c.function.name for c in choice.message.tool_calls],
-                prompt_tokens=getattr(usage, "prompt_tokens", None),
-                completion_tokens=getattr(usage, "completion_tokens", None),
-            )
-            return message
-        except AiRequestInterrupted:
-            raise
-        except Exception as exc:
-            error = exc if isinstance(exc, AiFailure) else request_failure(exc)
-            if error.is_limit:
-                record(
-                    "ai.request.limited",
-                    level="WARNING",
-                    stage="agent_decision",
-                    reason=error.public_message,
-                    **error.diagnostic_fields(),
-                )
-            else:
-                failure("ai.request.failed", exc, stage="agent_decision", **error.diagnostic_fields())
-            raise error from None
+            validate_value(result, EVALUATION_SCHEMA)
+        except (ValueError, KeyError, TypeError):
+            raise AiFailure("invalid_fields", "综合评估返回的结构或字段无效，请按给定结构重新评估") from None
+        return result

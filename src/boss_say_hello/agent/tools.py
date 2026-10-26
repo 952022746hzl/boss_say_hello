@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 from boss_say_hello.agent.contracts import EligibilityBlocked, background_decision, combined_assessment
 from boss_say_hello.agent.progress import PHASES, TOOL_LABELS
-from boss_say_hello.agent.tool_schema import DEFINITIONS, TEXT, obj, validate_value
+from boss_say_hello.agent.tool_schema import ACTION_SCHEMAS, TEXT, obj, validate_value
 from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted, parse_assessment
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure, JobUnavailable
 from boss_say_hello.browser.preferences import compact
@@ -27,7 +27,6 @@ class ToolExecutor:
         self.candidates_need_sync = False
         self.model_failures = {}
         self.focus_job = None
-        self.finished = False
         self.step = 0
         browser.bind_control(control)
         browser.bind_goal(run.config)
@@ -59,9 +58,9 @@ class ToolExecutor:
             raise ActionBlocked("登录失效或账号变化，请恢复原账号后继续")
 
     async def execute(self, name, args, *, actor="ai"):
-        if name not in DEFINITIONS or not isinstance(args, dict):
+        if name not in ACTION_SCHEMAS or not isinstance(args, dict):
             raise ValueError("未知工具")
-        validate_value(args, obj({"reason": TEXT, **DEFINITIONS[name][1]}))
+        validate_value(args, obj({"reason": TEXT, **ACTION_SCHEMAS[name]}))
         await self.guard()
         jid = args.get("job_id")
         current = self.active_job_id()
@@ -97,7 +96,10 @@ class ToolExecutor:
         started = time.monotonic()
         with scope(run_id=self.run.id, step=self.step, tool=name, job_id=jid, phase=PHASES[name]):
             try:
-                result = await getattr(self, name)(**{k: v for k, v in args.items() if k != "reason"})
+                call_args = {k: v for k, v in args.items() if k != "reason"}
+                if name == "skip_job":
+                    call_args["reason"] = args["reason"]
+                result = await getattr(self, name)(**call_args)
             except JobUnavailable:
                 if jid is None:
                     raise
@@ -118,13 +120,6 @@ class ToolExecutor:
 
     async def inspect_preferences(self):
         self.observation = await self.browser.preference_snapshot()
-        return self.observation
-
-    async def open_preferences(self):
-        if self.jobs:
-            raise ValueError("读取候选后不能切换筛选页面")
-        self.receipt = None
-        self.observation = await self.browser.open_preferences()
         return self.observation
 
     async def preference_action(self, option_id):
@@ -201,6 +196,9 @@ class ToolExecutor:
         ):
             return result
         key = (jid, name)
+        if name == "assess_job":
+            # A partially parsed assessment must not block its one allowed correction.
+            self.invalidate(jid)
         count = self.model_failures.get(key, 0) + 1
         self.model_failures[key] = count
         result = {**result, "job_id": jid, "corrections_remaining": max(0, 2 - count)}
@@ -314,10 +312,10 @@ class ToolExecutor:
             self.search_counts[key] = 1
             try:
                 found = await self.search.search(company)
-            except (AiFailure, AiRequestInterrupted) as exc:
-                if isinstance(exc, AiRequestInterrupted) or exc.is_limit:
-                    self.search_counts.pop(key, None)
-                    self.company_checked.discard(job_id)
+            except (AiFailure, AiRequestInterrupted):
+                # Service failure is not a completed query, even when it wasn't a 429.
+                self.search_counts.pop(key, None)
+                self.company_checked.discard(job_id)
                 raise
             sources = [{**source, "angle": "overview"} for source in found]
             if sources:
@@ -453,10 +451,10 @@ class ToolExecutor:
             )
         return result
 
-    async def skip_job(self, job_id):
+    async def skip_job(self, job_id, reason="程序根据当前条件跳过岗位"):
         self.done.add(job_id)
-        self.publish("check", job_id=job_id, status="skipped", reasons=["AI 决定跳过，理由见步骤记录"])
-        return {"status": "skipped"}
+        self.publish("check", job_id=job_id, status="skipped", reasons=[reason])
+        return {"status": "skipped", "reason": reason}
 
     def begin_decision(self, jid):
         steps = self.job_steps.get(jid, 0)
@@ -475,73 +473,3 @@ class ToolExecutor:
     def refund_decision(self, jid):
         # Infrastructure limits/pauses did not produce a usable decision or completed tool.
         self.job_steps[jid] = max(0, self.job_steps.get(jid, 0) - 1)
-
-    async def finish(self):
-        if self.active_job_id() is not None:
-            raise EligibilityBlocked(
-                self.active_job_id(),
-                {
-                    "status": "pending",
-                    "code": "unfinished_jobs",
-                    "reason": "当前岗位尚未处理完；请使用已提供的工具继续，或明确跳过当前岗位，不能结束整轮",
-                },
-            )
-        if not self.list_ended or self.candidates_need_sync:
-            raise EligibilityBlocked(
-                None,
-                {
-                    "status": "pending",
-                    "code": "more_candidates",
-                    "reason": "仍可能有更多候选岗位，请继续读取列表，不能提前结束整轮",
-                },
-            )
-        self.finished = True
-        return {"status": "finished", "discovered": self.discovered_count(), "handled": len(self.done)}
-
-    def summary(self):
-        jid = self.active_job_id()
-        current = None
-        if jid in self.jobs and jid not in self.done:
-            current = {
-                "job": asdict(self.jobs[jid]),
-                "sources": self.sources.get(jid, []),
-                "source_ids": self.source_ids(jid),
-                "company": self.companies.get(jid),
-                "assessment": asdict(self.assessments[jid]) if jid in self.assessments else None,
-                "background": asdict(self.backgrounds[jid]) if jid in self.backgrounds else None,
-            }
-        return {
-            "current": current,
-            "verified": bool(self.receipt),
-            "active_job_id": jid,
-            "pending_count": sum(j not in self.done for j in self.jobs),
-            "handled_count": len(self.done),
-            "discovered_count": self.discovered_count(),
-            "list_ended": self.list_ended,
-            "contact_limit": self.run.config.max_contacts,
-            "contacts": self.journal.contact_count(self.run.id),
-            "successes": self.journal.success_count(self.run.id),
-            "job_decisions_remaining": max(0, MAX_JOB_DECISIONS - self.job_steps.get(jid, 0)),
-            "jobs": [
-                {
-                    "id": jid,
-                    "title": job.title,
-                    "company": job.company,
-                    "city": job.city,
-                    "salary": job.salary_raw,
-                    "detail_read": jid in self.details,
-                    "sources": len(self.sources.get(jid, [])),
-                    "company_checked": jid in self.company_checked,
-                    "assessed": jid in self.assessments,
-                    "background_status": self.backgrounds[jid].status
-                    if jid in self.backgrounds
-                    else "unchecked",
-                    "score": self.assessments[jid].score if jid in self.assessments else None,
-                    "can_draft": jid not in self.done and self.greeting_block(jid) is None,
-                    "greeting": jid in self.greetings,
-                    "done": jid in self.done,
-                }
-                for jid, job in self.jobs.items()
-                if jid == self.active_job_id()
-            ],
-        }

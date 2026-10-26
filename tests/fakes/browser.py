@@ -13,6 +13,7 @@ class FakeBrowser:
         self.limit = 200
         self.behavior = "none"
         self.control = None
+        self.goal = None
 
     async def open(self, profile):
         pass
@@ -20,9 +21,35 @@ class FakeBrowser:
     async def session(self):
         return SessionInfo(self.account, self.account is not None)
 
-    async def iter_recommended(self):
-        for job in self.jobs:
-            yield job
+    def bind_goal(self, config):
+        self.goal = config
+
+    async def preference_snapshot(self):
+        return {
+            "document": "synthetic-document",
+            "expectations": [
+                {"label": f"{self.goal.target_title}({self.goal.cities[0]})", "selected": True}
+            ],
+            "controls": [],
+        }
+
+    async def verify_preferences(self, receipt):
+        return receipt == await self.preference_snapshot()
+
+    async def candidate_batch(self):
+        return {"jobs": self.jobs, "ended": True}
+
+    async def current_candidate_ids(self):
+        return {job.id for job in self.jobs}
+
+    async def company_info(self, job):
+        return {
+            "id": job.company_id or "synthetic-company",
+            "name": job.company,
+            "city": job.city,
+            "url": "https://company.example/about",
+            "text": "自主研发产品，直接招聘",
+        }
 
     async def capabilities(self):
         return BrowserCapabilities(self.limit, self.behavior)

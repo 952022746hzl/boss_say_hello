@@ -79,8 +79,24 @@ FIELDS = {
     "logged_in",
     "account_verified",
     "stack",
+    "request_id",
+    "request_path",
+    "attempt",
+    "process_id",
+    "total_tokens",
+    "in_flight",
+    "queue_size",
+    "wait_ms",
 }
 MESSAGES = {
+    "ai.queue.wait": "请求正在排队，等待请求槽",
+    "ai.queue.acquired": "已获得请求槽",
+    "ai.queue.released": "已释放请求槽",
+    "ai.http.started": "HTTP 实际请求开始",
+    "ai.http.succeeded": "HTTP 实际请求完成",
+    "ai.http.failed": "HTTP 实际请求失败",
+    "ai.http.cancelled": "HTTP 实际请求已取消",
+    "ai.request_log.unavailable": "完整请求日志无法写入，请检查本地日志目录权限或磁盘空间；请求继续执行。",
     "ai.retry.started": "已重新发起请求，正在等待服务响应",
     "ai.retry.wait": "模型服务暂时限流，等待后重试",
     "ai.request.limited": "模型服务限制请求",
@@ -122,7 +138,7 @@ MESSAGES = {
     "operation.succeeded": "后台操作完成",
     "operation.failed": "后台操作失败",
     "operation.cancelled": "后台操作已取消",
-    "ai.request.started": "模型请求开始",
+    "ai.request.started": "AI 逻辑调用开始",
     "ai.request.succeeded": "模型响应已收到",
     "ai.response.invalid_json": "模型响应 JSON 解析失败",
     "ai.request.failed": "模型请求失败",
@@ -173,6 +189,15 @@ def scope(**fields):
         _context.reset(token)
 
 
+def current_log():
+    logger = _current.get()
+    return logger if logger is not None and not logger.closed else None
+
+
+def context_fields():
+    return dict(_context.get() or {})
+
+
 def record(event, **fields):
     logger = _current.get()
     if logger:
@@ -213,7 +238,9 @@ class EventLog:
             return
         fields = {k: v for k, v in {**(_context.get() or {}), **fields}.items() if k in FIELDS}
         message = MESSAGES.get(event, event)
-        if event == "ai.retry.wait":
+        if event.startswith("ai.http."):
+            message += f" · 尝试 {fields.get('attempt', '?')}"
+        elif event == "ai.retry.wait":
             message = f"模型服务暂时限流，等待 {fields.get('wait_seconds', '?')} 秒后第 {fields.get('retry', '?')}/2 次重试"
         elif event == "ai.retry.started":
             message = f"已发起第 {fields.get('retry', '?')}/2 次重试，正在等待服务响应"

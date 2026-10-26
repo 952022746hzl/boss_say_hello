@@ -19,7 +19,7 @@ async def test_stop_during_model_request_discards_late_result_without_error(
 
     event_count = 0
 
-    async def decide(*args):
+    async def evaluate_job(*args, **kwargs):
         nonlocal event_count
         event_count = len(storage.events(ex.run.id))
         ex.control.closing.set()
@@ -36,7 +36,7 @@ async def test_stop_during_model_request_discards_late_result_without_error(
     log = EventLog(tmp_path / "logs", entries.append)
     try:
         with log.bind():
-            await AgentEngine(ex, SimpleNamespace(decide=decide)).run()
+            await AgentEngine(ex, SimpleNamespace(evaluate_job=evaluate_job)).run()
     finally:
         log.close()
     events = storage.events(ex.run.id)

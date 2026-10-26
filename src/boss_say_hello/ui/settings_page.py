@@ -309,6 +309,10 @@ class SettingsPage(QWidget):
         except ValueError as exc:
             self.status.setText(str(exc))
 
+    def set_ai_busy(self, busy, testing=False):
+        self.test_button.setEnabled(not busy)
+        self.test_button.setText("连接测试中…" if testing else "连接测试并保存")
+
     def bind_entered_secret(self):
         self.secret_scope = None
         if self.secret.text():

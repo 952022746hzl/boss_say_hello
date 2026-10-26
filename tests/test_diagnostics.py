@@ -41,7 +41,15 @@ async def test_model_request_logs_stage_and_duration_without_body(tmp_path, conf
         await ai.test_connection()
         await ai.close()
     log.close()
-    assert [e["event"] for e in entries] == ["ai.request.started", "ai.request.succeeded"]
+    assert [e["event"] for e in entries if e["event"].startswith("ai.request.")] == [
+        "ai.request.started",
+        "ai.request.succeeded",
+    ]
+    attempts = [e for e in entries if e["event"].startswith("ai.http.")]
+    assert [e["event"] for e in attempts] == ["ai.http.started", "ai.http.succeeded"]
+    assert attempts[0]["fields"]["request_id"] == attempts[1]["fields"]["request_id"]
+    assert attempts[-1]["fields"]["attempt"] == 1
+    assert attempts[-1]["fields"]["duration_ms"] >= 0
     assert entries[-1]["fields"]["duration_ms"] >= 0
     assert "secret-key" not in json.dumps(entries)
 
@@ -91,7 +99,7 @@ def test_log_view_defaults_to_readable_progress_and_optional_diagnostics(qtbot, 
         log.record("browser.read.started", level="DEBUG", operation="SESSION")
         log.record("browser.preference.started", action="click", control_label="Java(深圳)")
         text = page.output.toPlainText()
-        assert "第 3 步｜等待模型决策" in text
+        assert "第 3 步｜等待模型响应" in text
         assert "点击「Java(深圳)」" in text
         assert "SESSION" not in text and '"phase"' not in text
         page.show_fields.setChecked(True)

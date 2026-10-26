@@ -8,11 +8,12 @@ from openai import APIStatusError, AsyncOpenAI
 from boss_say_hello.ai.context import ContextBuilder, budget
 from boss_say_hello.ai.prompts import BOUNDARY, RESUME_SCHEMA
 from boss_say_hello.ai.recovery import RequestRecovery, request_failure
+from boss_say_hello.ai.request_gate import RequestGate
+from boss_say_hello.ai.request_trace import RequestTrace
 from boss_say_hello.ai.schemas import (
     AiFailure,
     AiRequestInterrupted,
     decode,
-    parse_assessment,
     parse_greeting,
     strings,
     text,
@@ -34,6 +35,7 @@ class AiService:
             raise AiFailure("invalid_key", str(exc)) from None
         self.config = config
         self.recovery = RequestRecovery()
+        self.request_gate = RequestGate()
         self.client = AsyncOpenAI(
             api_key=secret,
             base_url=config.base_url,
@@ -45,12 +47,21 @@ class AiService:
         )
 
     async def completion(self, messages, *, stage, **options):
+        trace = RequestTrace(
+            stage,
+            self.config.base_url.rstrip("/") + "/chat/completions",
+            {"model": self.config.model, "messages": messages, **options},
+            secret=self.client.api_key,
+        )
+
         async def request():
             return await self.client.chat.completions.create(
                 model=self.config.model, messages=messages, **options
             )
 
-        return await self.recovery.call(request, stage=stage)
+        with trace.bind():
+            async with self.request_gate.slot(control=self.recovery.control):
+                return await self.recovery.call(lambda: trace.call(request), stage=stage)
 
     async def _request(self, messages, stage="request"):
         budget(messages)
@@ -137,11 +148,6 @@ class AiService:
             return keywords, summary
         except (KeyError, TypeError):
             raise AiFailure("invalid_fields") from None
-
-    async def assess(self, run, job):
-        return parse_assessment(
-            decode(await self._request(ContextBuilder.assessment_messages(run, job), stage="assessment"))
-        )
 
     async def greet(self, run, job, assessment):
         messages = ContextBuilder.greeting_messages(run, job, assessment)

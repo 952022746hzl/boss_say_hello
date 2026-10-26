@@ -2,40 +2,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from boss_say_hello.domain import Greeting
-from tests.test_agent_engine import assessment_args, environment
+from tests.test_agent_engine import environment, evaluation_payload
 
 
 async def test_backend_runs_agent_to_preview(config, snapshot, job, storage, tmp_path, resume, monkeypatch):
-    import json
-
     from boss_say_hello.runtime.backend import Backend
 
     ex, browser, search, _, _ = environment(config, snapshot, job, storage, tmp_path)
-    sequence = [
-        ("inspect_preferences", {}),
-        ("verify_preferences", {}),
-        ("list_jobs", {}),
-        ("read_job", {"job_id": "j1"}),
-        ("search_company", {"job_id": "j1"}),
-        ("assess_job", assessment_args()),
-        ("draft_greeting", {"job_id": "j1"}),
-        ("finish", {}),
-    ]
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": str(i),
-                    "type": "function",
-                    "function": {"name": name, "arguments": json.dumps({"reason": "合成验收", **args})},
-                }
-            ],
-        }
-        for i, (name, args) in enumerate(sequence)
-    ]
     ai = SimpleNamespace(
-        decide=AsyncMock(side_effect=messages),
+        evaluate_job=AsyncMock(return_value=evaluation_payload()),
         greet=AsyncMock(return_value=Greeting("您好，我有 Python 项目经验", ("Python",))),
         close=AsyncMock(),
     )

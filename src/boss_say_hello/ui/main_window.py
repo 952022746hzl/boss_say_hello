@@ -16,6 +16,7 @@ class MainWindow(QMainWindow):
         self.controller = controller
         self.close_save_futures = None
         self.tag_account = None
+        self.ai_operations = set()
         self.setWindowTitle("BOSS 求职助手")
         self.resize(1100, 760)
         central = QWidget()
@@ -24,7 +25,7 @@ class MainWindow(QMainWindow):
         heading.setStyleSheet("font-size: 24px; font-weight: 600; color: #103f46;")
         layout.addWidget(heading)
         layout.addWidget(
-            QLabel("AI 自主筛选 · 公司背景核查 · 简历匹配与招呼语 · 点击开始后执行，发送方式以配置为准")
+            QLabel("岗位筛选 · AI 综合评估与招呼语 · 点击开始后执行，发送方式以配置为准")
         )
         self.login = LoginPanel(controller)
         layout.addWidget(self.login)
@@ -73,6 +74,20 @@ class MainWindow(QMainWindow):
 
     def on_event(self, event):
         p = event.payload
+        pending = {
+            "run_pending": "run",
+            "resume_import_pending": "import_resume",
+            "connection_test_pending": "test_connection",
+        }
+        idle = {
+            "run_idle": "run",
+            "resume_import_idle": "import_resume",
+            "connection_test_idle": "test_connection",
+        }
+        if event.kind in pending:
+            self.ai_operations.add(pending[event.kind])
+        elif event.kind in idle:
+            self.ai_operations.discard(idle[event.kind])
         if event.kind == "log":
             self.logs.add_entry(p["entry"])
         elif event.kind == "logs_ready":
@@ -95,6 +110,10 @@ class MainWindow(QMainWindow):
             self.resume.set_importing(True)
         elif event.kind == "resume_import_idle":
             self.resume.set_importing(False)
+        elif event.kind == "connection_test_pending":
+            self.settings.status.setText("正在测试模型连接，请稍候…")
+        elif event.kind == "connection_test_idle":
+            pass
         elif event.kind == "resume_confirm_pending":
             self.resume.set_confirming(True)
         elif event.kind == "resume_confirm_idle":
@@ -124,7 +143,7 @@ class MainWindow(QMainWindow):
             self.settings.status.setText(p["message"])
             if event.kind == "ui_error" and p.get("operation") == "run":
                 self.run.status.setText(p["message"])
-            if event.kind == "ui_error" and p.get("operation") == "confirm_resume":
+            if event.kind == "ui_error" and p.get("operation") in ("confirm_resume", "import_resume"):
                 self.resume.status.setText(p["message"])
             if p.get("code") in ("missing_key", "invalid_key", "authentication_failed"):
                 mark_invalid(self.settings.secret, True)
@@ -147,6 +166,10 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(
                     "任务等待发送确认，请阅读提示并点击「已知晓，继续自动发送」；尚未开始岗位处理"
                 )
+        ai_busy = bool(self.ai_operations)
+        self.settings.set_ai_busy(ai_busy, testing="test_connection" in self.ai_operations)
+        self.resume.set_ai_busy(ai_busy)
+        self.run.start_button.setEnabled(self.run.ready and not self.run.active and not ai_busy)
 
     def closeEvent(self, event):
         if not self.controller.shutting_down:

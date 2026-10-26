@@ -18,7 +18,7 @@ def validate_agent_goal(config):
     if not config.target_title.strip():
         raise ValueError("请填写期望职位")
     if len(config.cities) != 1:
-        raise ValueError("自主运行每轮请选择一个工作城市")
+        raise ValueError("每轮请选择一个工作城市")
     if config.salary_min is None or config.salary_max is None:
         raise ValueError("筛选岗位前请填写完整薪资区间")
 

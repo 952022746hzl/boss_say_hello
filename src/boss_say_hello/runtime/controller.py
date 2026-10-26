@@ -24,6 +24,7 @@ class Controller(QObject):
         self.generation = 0
         self.run_pending = False
         self.import_pending = False
+        self.test_pending = False
         self.confirm_pending = False
         self.default_warning_visible = False
         self.shutting_down = False
@@ -44,6 +45,8 @@ class Controller(QObject):
                 self.control = RunControl()
         if event.kind == "resume_import_idle":
             self.import_pending = False
+        if event.kind == "connection_test_idle":
+            self.test_pending = False
         if event.kind == "resume_confirm_idle":
             self.confirm_pending = False
         if event.kind == "resume_draft":
@@ -51,6 +54,13 @@ class Controller(QObject):
         self.event.emit(event)
 
     def submit(self, method, *args):
+        idle_kind = {
+            "run": "run_idle",
+            "import_resume": "resume_import_idle",
+            "confirm_resume": "resume_confirm_idle",
+            "test_connection": "connection_test_idle",
+        }.get(method)
+
         async def call():
             started = time.monotonic()
             try:
@@ -100,15 +110,20 @@ class Controller(QObject):
                     )
                 )
             finally:
-                if method == "run":
-                    self.worker.event.emit(RunEvent("", "run_idle", {}))
-                if method == "import_resume":
-                    self.worker.event.emit(RunEvent("", "resume_import_idle", {}))
-                if method == "confirm_resume":
-                    self.worker.event.emit(RunEvent("", "resume_confirm_idle", {}))
+                if idle_kind:
+                    self.worker.event.emit(RunEvent("", idle_kind, {}))
             return False
 
-        return self.worker.submit(call())
+        coroutine = call()
+        try:
+            return self.worker.submit(coroutine)
+        except RuntimeError:
+            coroutine.close()
+            message = "后台服务尚未就绪或正在关闭，请稍后重试"
+            self.receive(RunEvent("", "ui_error", {"message": message, "operation": method}))
+            if idle_kind:
+                self.receive(RunEvent("", idle_kind, {}))
+            raise ValueError(message) from None
 
     def log_failure(self, event, exc, **fields):
         if self.backend and self.backend.log:
@@ -128,7 +143,18 @@ class Controller(QObject):
         return self.submit("save_settings", config)
 
     def test_connection(self, config, secret):
+        self.ensure_ai_idle()
+        self.test_pending = True
+        self.event.emit(RunEvent("", "connection_test_pending", {}))
         return self.submit("test_connection", config, secret)
+
+    def ensure_ai_idle(self):
+        if self.run_pending:
+            raise ValueError("已有任务正在运行或启动，请结束本轮后再执行模型操作")
+        if self.import_pending:
+            raise ValueError("简历正在提炼，请等待提炼结束后再执行模型操作")
+        if self.test_pending:
+            raise ValueError("正在测试模型连接，请等待连接测试结束")
 
     def use_credential(self, id, secret):
         return self.submit("use_credential", id, secret)
@@ -154,6 +180,7 @@ class Controller(QObject):
         self.event.emit(RunEvent("", "resume_dirty", {}))
 
     def import_resume(self, path, config, secret=""):
+        self.ensure_ai_idle()
         if self.import_pending or self.confirm_pending:
             raise ValueError("简历正在提炼或确认，请等待当前操作结束")
         config.validate(ready=True)
@@ -174,8 +201,7 @@ class Controller(QObject):
         return self.submit("save_resume_draft", source_id, keywords, summary, self.generation)
 
     def start_run(self, config, resume=None):
-        if self.run_pending:
-            raise ValueError("已有任务正在运行或启动")
+        self.ensure_ai_idle()
         if not self.resume_ready or self.current_resume is None:
             raise ValueError("请先核对并确认简历")
         config.validate(ready=True)

@@ -33,7 +33,7 @@ PHASES = {
 PHASE_LABELS = {
     "rate_limit_wait": "模型限流，正在等待重试",
     "retry_wait": "重试已发起，正在等待服务响应",
-    "model_wait": "等待模型决策",
+    "model_wait": "等待模型响应",
     "browser_action": "正在操作页面",
     "page_read": "正在读取页面",
     "verify": "正在核验结果",

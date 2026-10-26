@@ -1,23 +1,8 @@
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 from boss_say_hello.agent.engine import AgentEngine
 from boss_say_hello.diagnostics import EventLog
-from tests.test_agent_engine import assessment_args, environment, prepare
-
-
-def decision(name, **args):
-    return {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "id": name,
-                "type": "function",
-                "function": {"name": name, "arguments": json.dumps({"reason": "合成检查", **args})},
-            }
-        ],
-    }
+from tests.test_agent_engine import environment, evaluation_payload, evaluator, prepare
 
 
 async def ready(config, snapshot, job, storage, tmp_path):
@@ -28,39 +13,14 @@ async def ready(config, snapshot, job, storage, tmp_path):
     return ex
 
 
-async def test_assessment_schema_only_offers_actual_source_ids(config, snapshot, job, storage, tmp_path):
-    ex = await ready(config, snapshot, job, storage, tmp_path)
-    tool = next(
-        t["function"]
-        for t in AgentEngine(ex, None).available_tools()
-        if t["function"]["name"] == "assess_job"
-    )
-    refs = tool["parameters"]["properties"]["background"]["properties"]["source_ids"]
-    assert refs["items"]["enum"] == ["e1"]
-    assert "enum" not in tool["parameters"]["properties"]["reason"]
-    scoring = tool["parameters"]["properties"]["assessment"]["properties"]
-    assert "enum" not in scoring["reason"]
-    assert all("enum" not in scoring[key]["items"] for key in ("evidence", "gaps", "missing"))
-    assert "enum" not in tool["parameters"]["properties"]["background"]["properties"]["reason"]
-    assert "source_ids" in ex.summary()["current"]
-    assert ex.summary()["current"]["source_ids"] == ["e1"]
-
-
 async def test_invalid_evidence_corrects_once_with_explicit_allowed_ids(
     config, snapshot, job, storage, tmp_path
 ):
     ex = await ready(config, snapshot, job, storage, tmp_path)
-    invalid = assessment_args()
+    invalid = evaluation_payload()
     invalid["background"]["source_ids"] = ["guessed-source"]
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            side_effect=[
-                decision("assess_job", **invalid),
-                decision("assess_job", **assessment_args()),
-                decision("finish"),
-            ]
-        )
-    )
+    ai = evaluator()
+    ai.evaluate_job.side_effect = [invalid, evaluation_payload()]
     entries = []
     log = EventLog(tmp_path / "logs", entries.append)
     try:
@@ -68,7 +28,7 @@ async def test_invalid_evidence_corrects_once_with_explicit_allowed_ids(
             await AgentEngine(ex, ai).run()
     finally:
         log.close()
-    feedback = json.loads(ai.decide.call_args_list[1].args[0][-1]["content"])
+    feedback = ai.evaluate_job.call_args_list[1].kwargs["correction"]
     assert feedback["code"] == "unknown_evidence"
     assert feedback["allowed_source_ids"] == ["e1"]
     assert feedback["corrections_remaining"] == 1
@@ -83,46 +43,43 @@ async def test_repeated_bad_evidence_becomes_pending_without_more_assessments(
     config, snapshot, job, storage, tmp_path
 ):
     ex = await ready(config, snapshot, job, storage, tmp_path)
-    invalid = assessment_args()
+    invalid = evaluation_payload()
     invalid["background"]["source_ids"] = ["guessed-source"]
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            side_effect=[
-                decision("assess_job", **invalid),
-                decision("assess_job", **invalid),
-                decision("finish"),
-            ]
-        )
-    )
+    ai = evaluator()
+    ai.evaluate_job.return_value = invalid
     await AgentEngine(ex, ai).run()
     assert "j1" in ex.done
     assert "j1" not in ex.assessments and "j1" not in ex.greetings
-    assert ai.decide.await_count == 2
-    events = storage.events(ex.run.id)
-    assert any(e.kind == "check" and e.payload.get("status") == "pending" for e in events)
+    assert ai.evaluate_job.await_count == 2
+    assert any(e.kind == "check" and e.payload.get("status") == "pending" for e in storage.events(ex.run.id))
     ex.delivery.deliver.assert_not_called()
     assert ex.search.search.await_count == 1
 
 
-async def test_malformed_assessment_arguments_also_stop_after_one_correction(
+async def test_malformed_assessment_also_stops_after_one_correction(config, snapshot, job, storage, tmp_path):
+    ex = await ready(config, snapshot, job, storage, tmp_path)
+    ai = evaluator()
+    ai.evaluate_job.return_value["background"]["score"] = "eighty"
+    await AgentEngine(ex, ai).run()
+    assert "j1" in ex.done and "j1" not in ex.backgrounds
+    assert ai.evaluate_job.await_count == 2
+    ex.delivery.deliver.assert_not_called()
+
+
+async def test_invalid_score_after_valid_background_can_be_corrected(
     config, snapshot, job, storage, tmp_path
 ):
     ex = await ready(config, snapshot, job, storage, tmp_path)
-    invalid = assessment_args()
-    invalid["background"]["score"] = "eighty"
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            side_effect=[
-                decision("assess_job", **invalid),
-                decision("assess_job", **invalid),
-                decision("finish"),
-            ]
-        )
-    )
+    invalid = evaluation_payload()
+    invalid["assessment"]["evidence"] = []
+    # Parsing fails after background is otherwise valid; don't leave it blocking the correction.
+    invalid["assessment"]["reason"] = ""
+    ai = evaluator()
+    ai.evaluate_job.side_effect = [invalid, evaluation_payload()]
     await AgentEngine(ex, ai).run()
-    assert "j1" in ex.done
-    assert "j1" not in ex.backgrounds
-    ex.delivery.deliver.assert_not_called()
+    assert ai.evaluate_job.await_count == 2
+    assert ex.assessments["j1"].score == 76
+    assert ex.ai.greet.await_count == 1
 
 
 async def test_exhausted_job_does_not_consume_next_jobs_correction(config, snapshot, job, storage, tmp_path):
@@ -130,31 +87,23 @@ async def test_exhausted_job_does_not_consume_next_jobs_correction(config, snaps
     ex.jobs["j2"] = job(id="j2")
     ex.job_steps["j1"] = 12
     ex.browser.refresh_job.return_value = job(id="j2")
-    invalid = assessment_args()
-    invalid["job_id"] = "j2"
+    invalid = evaluation_payload()
     invalid["background"]["source_ids"] = ["wrong"]
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            side_effect=[
-                decision("read_job", job_id="j2"),
-                decision("search_company", job_id="j2"),
-                decision("assess_job", **invalid),
-                decision("skip_job", job_id="j2"),
-            ]
-        )
-    )
+    ai = evaluator()
+    ai.evaluate_job.side_effect = [invalid, evaluation_payload("suspected")]
     await AgentEngine(ex, ai).run()
     assert "j1" in ex.done and "j2" in ex.done
     assert ex.model_failures[("j2", "assess_job")] == 1
+    assert ("j1", "assess_job") not in ex.model_failures
 
 
-async def test_multiple_calls_in_one_response_consume_only_one_correction(
+async def test_model_action_injection_cannot_run_tool_and_is_bounded(
     config, snapshot, job, storage, tmp_path
 ):
     ex = await ready(config, snapshot, job, storage, tmp_path)
-    message = decision("assess_job", **assessment_args())
-    message["tool_calls"] *= 3
-    ai = SimpleNamespace(decide=AsyncMock(side_effect=[message, decision("skip_job", job_id="j1")]))
+    ai = evaluator()
+    ai.evaluate_job.return_value = {"tool_calls": [{"function": {"name": "send_greeting"}}]}
     await AgentEngine(ex, ai).run()
     assert "j1" in ex.done and "j1" not in ex.assessments
-    assert ex.model_failures[("j1", "assess_job")] == 1
+    assert ex.model_failures[("j1", "assess_job")] == 2
+    ex.delivery.deliver.assert_not_called()

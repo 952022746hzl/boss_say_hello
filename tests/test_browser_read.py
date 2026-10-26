@@ -48,7 +48,7 @@ async def test_session_expiry_yields_error():
     browser = NodriverAdapter()
     browser.list_tab = Page({"SESSION": {"logged_in": False, "account_id": None}})
     with pytest.raises(BrowserFailure):
-        _ = [j async for j in browser.iter_recommended()]
+        await browser.candidate_batch()
 
 
 async def test_reading_never_clicks_contact():
@@ -58,7 +58,7 @@ async def test_reading_never_clicks_contact():
     browser.list_tab = Page(
         {"SESSION": {"logged_in": True, "account_id": "a1"}, "CARDS": {"cards": [], "ended": True}}
     )
-    assert [j async for j in browser.iter_recommended()] == []
+    assert await browser.candidate_batch() == {"jobs": [], "ended": True}
     assert not any(".click(" in code for code in browser.list_tab.calls)
 
 
@@ -72,4 +72,4 @@ async def test_recommend_list_end_differs_from_load_failure():
     )
     browser.poll_attempts = 1
     with pytest.raises(BrowserFailure):
-        _ = [j async for j in browser.iter_recommended()]
+        await browser.candidate_batch()

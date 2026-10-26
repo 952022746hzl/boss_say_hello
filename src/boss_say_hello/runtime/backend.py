@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from boss_say_hello.agent.search import CompanySearch
 from boss_say_hello.agent.tools import ToolExecutor
 from boss_say_hello.ai.agent_client import AgentClient
 from boss_say_hello.ai.client import AiService
+from boss_say_hello.ai.request_gate import RequestGate
 from boss_say_hello.browser.nodriver_adapter import NodriverAdapter
 from boss_say_hello.delivery.journal import DeliveryJournal
 from boss_say_hello.delivery.service import DeliveryService
@@ -41,6 +43,8 @@ class Backend:
         self.store = None
         self.initialized = False
         self.busy = False
+        self.ai_operation = None
+        self.request_gate = RequestGate()
         self.lock = asyncio.Lock()
         self.credentials = CredentialStore()
         self.log = None
@@ -132,36 +136,50 @@ class Backend:
             return self.secrets[scope]
         return await asyncio.to_thread(self.credentials.get, scope) or ""
 
-    async def test_connection(self, config, secret):
-        config.validate(ready=True)
-        await self.save_settings(config)
-        secret = secret or await self.secret(config)
-        ai = AiService(config, secret)
+    @asynccontextmanager
+    async def ai_entrypoint(self, operation):
+        if self.ai_operation is not None:
+            raise ValueError("已有模型操作正在执行，请等待连接测试、简历提炼或本轮任务结束")
+        self.ai_operation = operation
         try:
-            await ai.test_connection()
+            yield
         finally:
-            await ai.close()
-        if secret:
-            await self.use_credential(config, secret)
+            self.ai_operation = None
+
+    async def test_connection(self, config, secret):
+        async with self.ai_entrypoint("test_connection"):
+            config.validate(ready=True)
+            await self.save_settings(config)
+            secret = secret or await self.secret(config)
+            ai = AiService(config, secret)
+            ai.request_gate = self.request_gate
             try:
-                await asyncio.to_thread(self.credentials.save, credential_scope(config), secret)
-            except CredentialUnavailable:
-                self.notice(
-                    "notice", message="连接测试成功，但系统凭据保存失败；密钥仅本次有效，下次需重新输入"
-                )
-                return
-        self.notice("notice", message="连接测试成功，配置和密钥已自动保存，下次启动会恢复")
+                await ai.test_connection()
+            finally:
+                await ai.close()
+            if secret:
+                await self.use_credential(config, secret)
+                try:
+                    await asyncio.to_thread(self.credentials.save, credential_scope(config), secret)
+                except CredentialUnavailable:
+                    self.notice(
+                        "notice", message="连接测试成功，但系统凭据保存失败；密钥仅本次有效，下次需重新输入"
+                    )
+                    return
+            self.notice("notice", message="连接测试成功，配置和密钥已自动保存，下次启动会恢复")
 
     async def import_resume(self, path, generation, config, secret=""):
-        config.validate(ready=True)
-        ai = AiService(config, secret or await self.secret(config))
-        self.notice("notice", message="正在提取 PDF 并生成关键词、摘要，请稍候")
-        try:
-            version = await ResumeService(self.store, ai, self.root / "resumes").import_pdf(path)
-        finally:
-            await ai.close()
-        self.notice("resume", version=version, generation=generation)
-        self.draft_path.unlink(missing_ok=True)
+        async with self.ai_entrypoint("import_resume"):
+            config.validate(ready=True)
+            ai = AiService(config, secret or await self.secret(config))
+            ai.request_gate = self.request_gate
+            self.notice("notice", message="正在提取 PDF 并生成关键词、摘要，请稍候")
+            try:
+                version = await ResumeService(self.store, ai, self.root / "resumes").import_pdf(path)
+            finally:
+                await ai.close()
+            self.notice("resume", version=version, generation=generation)
+            self.draft_path.unlink(missing_ok=True)
 
     async def save_resume_draft(self, source_id, keywords, summary, generation):
         latest = self.store.latest_resume()
@@ -232,6 +250,10 @@ class Backend:
             self.notice("history_events", events=self.store.events(run_id), id=run_id)
 
     async def run(self, config, resume, control):
+        async with self.ai_entrypoint("run"):
+            await self._run(config, resume, control)
+
+    async def _run(self, config, resume, control):
         if self.busy:
             raise ValueError("已有运行中的任务")
         validate_agent_goal(config)
@@ -257,7 +279,9 @@ class Backend:
             # Hold this client's key and configuration until this run ends.
             key = await self.secret(config)
             ai = AgentClient(config, key)
+            ai.request_gate = self.request_gate
             search = CompanySearch(config, key)
+            search.request_gate = self.request_gate
             run = RunSnapshot(
                 uuid4().hex, session.account_id, config, resume, datetime.now(timezone.utc).isoformat()
             )

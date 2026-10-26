@@ -19,13 +19,10 @@ def test_greeting_validation(text, limit, status):
     assert validate_greeting(Greeting(text), limit).status == status
 
 
-async def test_low_score_does_not_generate(snapshot, job):
-    from boss_say_hello.domain import Assessment
-    from boss_say_hello.greetings.service import GreetingService
-
-    class AI:
-        async def greet(self, *args):
-            raise AssertionError("must not call AI")
-
-    with pytest.raises(ValueError):
-        await GreetingService(AI()).generate(snapshot(), job(), Assessment(20, "low", (), (), ()))
+async def test_low_score_does_not_generate(setup_agent):
+    x = setup_agent()
+    x.ai.evaluate_job.return_value["assessment"]["score"] = 20
+    await x.engine.run()
+    x.ai.greet.assert_not_called()
+    assert not any(e.kind == "greeting" for e in x.events)
+    assert not x.browser.calls

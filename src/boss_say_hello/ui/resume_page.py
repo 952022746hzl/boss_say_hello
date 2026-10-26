@@ -23,6 +23,7 @@ class ResumePage(QWidget):
         self.version = None
         self.importing = False
         self.confirming = False
+        self.ai_busy = False
         self.dirty = False
         self.auto_save_timer = QTimer(self)
         self.auto_save_timer.setSingleShot(True)
@@ -75,10 +76,15 @@ class ResumePage(QWidget):
             return
         path, _ = QFileDialog.getOpenFileName(self, "选择简历", "", "PDF (*.pdf)")
         if path:
-            self.flush_save()
-            self.confirm_button.setEnabled(False)
-            self.status.setText("正在导入 · 使用当前界面的模型配置")
-            self.controller.import_resume(Path(path), config, secret)
+            try:
+                self.flush_save()
+                self.controller.import_resume(Path(path), config, secret)
+            except ValueError as exc:
+                self.status.setText(str(exc))
+
+    def set_ai_busy(self, busy):
+        self.ai_busy = busy
+        self.update_editability()
 
     def set_importing(self, importing):
         self.importing = importing
@@ -95,7 +101,7 @@ class ResumePage(QWidget):
 
     def update_editability(self):
         enabled = not (self.importing or self.confirming)
-        self.upload_button.setEnabled(enabled)
+        self.upload_button.setEnabled(enabled and not self.ai_busy)
         self.keywords.setEnabled(enabled)
         self.summary.setEnabled(enabled)
         self.confirm_button.setEnabled(enabled and self.version is not None)

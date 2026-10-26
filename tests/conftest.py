@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from boss_say_hello.domain import AppConfig, Job, ResumeVersion, RunSnapshot
-from tests.test_engine import setup_engine as setup_engine
+from tests.fakes.agent import make_agent
 
 
 @pytest.fixture
@@ -55,3 +55,29 @@ def storage(tmp_path):
     store = RecordStore(tmp_path / "records.sqlite3")
     yield store
     store.close()
+
+
+@pytest.fixture
+def agent_config(config):
+    return lambda **kw: config(
+        **{
+            "target_title": "Python engineer",
+            "cities": ("北京",),
+            "salary_min": 20000,
+            "salary_max": 30000,
+            **kw,
+        }
+    )
+
+
+@pytest.fixture
+def setup_agent(storage, tmp_path, job, snapshot, agent_config):
+    def make(run=None, jobs=None):
+        return make_agent(
+            run or snapshot(config=agent_config()),
+            [job()] if jobs is None else jobs,
+            storage,
+            tmp_path,
+        )
+
+    return make

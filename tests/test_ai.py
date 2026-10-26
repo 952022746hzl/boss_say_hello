@@ -3,6 +3,8 @@ import json
 import httpx
 import pytest
 
+from tests.fakes.agent import evaluation_payload
+
 
 @pytest.mark.parametrize("value", [101, -1, True, 70.5, "70"])
 def test_invalid_score_rejected(value):
@@ -42,12 +44,13 @@ async def test_connection_request_has_no_resume(config):
 
 @pytest.mark.parametrize("stage", ["assessment", "resume_extract", "greeting", "greeting_shorten"])
 async def test_structured_requests_enable_json_mode(stage, config, snapshot, job):
+    from boss_say_hello.ai.agent_client import AgentClient
     from boss_say_hello.ai.client import AiService
     from boss_say_hello.domain import Assessment
 
     bodies = []
     payloads = {
-        "assessment": {"score": 80, "reason": "相关经验", "evidence": [], "gaps": [], "missing": []},
+        "assessment": evaluation_payload(),
         "resume_extract": {"keywords": ["Python"], "summary": "服务开发"},
         "greeting": {"text": "您好，期待沟通", "evidence": []},
         "greeting_shorten": {"text": "您好，期待沟通", "evidence": []},
@@ -62,10 +65,11 @@ async def test_structured_requests_enable_json_mode(stage, config, snapshot, job
             },
         )
 
-    ai = AiService(config(), "test-key", httpx.MockTransport(respond))
+    client = AgentClient if stage == "assessment" else AiService
+    ai = client(config(), "test-key", httpx.MockTransport(respond))
     try:
         if stage == "assessment":
-            await ai.assess(snapshot(), job())
+            await ai.evaluate_job(snapshot(), job(), {"name": "Example"}, [])
         elif stage == "resume_extract":
             await ai.extract_resume("Python 服务开发")
         elif stage == "greeting_shorten":
@@ -81,10 +85,10 @@ async def test_structured_requests_enable_json_mode(stage, config, snapshot, job
     "finish_reason,code", [("length", "response_truncated"), ("content_filter", "response_filtered")]
 )
 async def test_incomplete_response_cannot_return_a_score(finish_reason, code, config, snapshot, job):
-    from boss_say_hello.ai.client import AiService
+    from boss_say_hello.ai.agent_client import AgentClient
     from boss_say_hello.ai.schemas import AiFailure
 
-    payload = {"score": 99, "reason": "r", "evidence": [], "gaps": [], "missing": []}
+    payload = evaluation_payload(99)
 
     def respond(request):
         return httpx.Response(
@@ -92,10 +96,10 @@ async def test_incomplete_response_cannot_return_a_score(finish_reason, code, co
             json={"choices": [{"message": {"content": json.dumps(payload)}, "finish_reason": finish_reason}]},
         )
 
-    ai = AiService(config(), "test-key", httpx.MockTransport(respond))
+    ai = AgentClient(config(), "test-key", httpx.MockTransport(respond))
     try:
         with pytest.raises(AiFailure) as caught:
-            await ai.assess(snapshot(), job())
+            await ai.evaluate_job(snapshot(), job(), {"name": "Example"}, [])
         assert caught.value.code == code
     finally:
         await ai.close()
@@ -119,7 +123,7 @@ def test_json_parse_failure_logs_location_without_response_body(tmp_path):
 
 @pytest.mark.parametrize("mode", ["timeout", "bad_json", "missing", "empty", "429"])
 async def test_model_failures_never_return_score(mode, config, snapshot, job, caplog):
-    from boss_say_hello.ai.client import AiService
+    from boss_say_hello.ai.agent_client import AgentClient
     from boss_say_hello.ai.schemas import AiFailure
 
     def respond(request):
@@ -145,9 +149,9 @@ async def test_model_failures_never_return_score(mode, config, snapshot, job, ca
             },
         )
 
-    ai = AiService(config(), "secret-for-test", httpx.MockTransport(respond))
+    ai = AgentClient(config(), "secret-for-test", httpx.MockTransport(respond))
     with pytest.raises(AiFailure) as caught:
-        await ai.assess(snapshot(), job())
+        await ai.evaluate_job(snapshot(), job(), {"name": "Example"}, [])
     assert "secret-for-test" not in str(caught.value) + caplog.text
     await ai.close()
 

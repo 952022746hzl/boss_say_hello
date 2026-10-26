@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from boss_say_hello.ai.recovery import RequestRecovery
+from boss_say_hello.ai.request_gate import RequestGate
+from boss_say_hello.ai.request_trace import RequestTrace
 from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.diagnostics import record
 from boss_say_hello.storage.credentials import normalize_secret
@@ -48,9 +50,17 @@ class CompanySearch:
         )
         self.allowed_urls = set()
         self.recovery = RequestRecovery()
+        self.request_gate = RequestGate()
 
     async def _post(self, operation, payload):
         record("company.search.started", operation=operation)
+        stage = "company_" + operation
+        trace = RequestTrace(
+            stage,
+            str(self.client.base_url.join("tools/" + operation)),
+            payload,
+            secret=self.client.headers["Authorization"].removeprefix("Bearer "),
+        )
 
         async def request():
             response = await self.client.post("tools/" + operation, json=payload)
@@ -58,7 +68,9 @@ class CompanySearch:
             return response.json()
 
         try:
-            return await self.recovery.call(request, stage="company_" + operation)
+            with trace.bind():
+                async with self.request_gate.slot(control=self.recovery.control):
+                    return await self.recovery.call(lambda: trace.call(request), stage=stage)
         except AiFailure as exc:
             record(
                 "ai.request.limited",

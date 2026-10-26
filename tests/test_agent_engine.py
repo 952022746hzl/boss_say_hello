@@ -55,7 +55,9 @@ def environment(config, snapshot, job, storage, tmp_path, **overrides):
             ]
         )
     )
-    ai = SimpleNamespace(greet=AsyncMock(return_value=SimpleNamespace()))
+    from boss_say_hello.domain import Greeting
+
+    ai = SimpleNamespace(greet=AsyncMock(return_value=Greeting("您好，我有相关开发经验，希望进一步沟通。")))
     delivery = SimpleNamespace(deliver=AsyncMock(return_value=[]))
     control = SimpleNamespace(pause_requested=Event(), closing=Event())
     events = []
@@ -103,6 +105,15 @@ async def prepare(executor):
     await executor.execute("list_jobs", {"reason": "读取候选"})
 
 
+def evaluation_payload(category="clear"):
+    args = assessment_args(category)
+    return {k: args[k] for k in ("assessment", "background")}
+
+
+def evaluator(category="clear"):
+    return SimpleNamespace(evaluate_job=AsyncMock(return_value=evaluation_payload(category)))
+
+
 @pytest.mark.parametrize("order", [("read_job", "search_company"), ("search_company", "read_job")])
 async def test_different_tool_paths_can_reach_same_assessment(
     config, snapshot, job, storage, tmp_path, order
@@ -143,10 +154,11 @@ async def test_no_evidence_or_unknown_tool_cannot_send(config, snapshot, job, st
     delivery.deliver.assert_not_called()
 
 
-async def test_agent_client_preserves_tool_message(config):
+async def test_agent_client_evaluates_current_job_once_without_action_tools(config, snapshot, job):
     from boss_say_hello.ai.agent_client import AgentClient
 
     bodies = []
+    payload = evaluation_payload()
 
     def respond(request):
         bodies.append(json.loads(request.content))
@@ -155,19 +167,8 @@ async def test_agent_client_preserves_tool_message(config):
             json={
                 "choices": [
                     {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "reasoning_content": "private thought",
-                            "tool_calls": [
-                                {
-                                    "id": "call1",
-                                    "type": "function",
-                                    "function": {"name": "finish", "arguments": '{"reason":"done"}'},
-                                }
-                            ],
-                        },
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": json.dumps(payload)},
                     }
                 ]
             },
@@ -175,52 +176,43 @@ async def test_agent_client_preserves_tool_message(config):
 
     ai = AgentClient(config(), "test-key", httpx.MockTransport(respond))
     try:
-        message = await ai.decide([{"role": "user", "content": "test"}], [])
-        assert message["tool_calls"][0]["id"] == "call1"
-        assert message["reasoning_content"] == "private thought"
-        assert bodies[0]["tool_choice"] == "required"
+        run = snapshot()
+        sources = [{"id": "e1", "url": "https://example.com", "text": "source-text"}]
+        assert await ai.evaluate_job(run, job(), {"name": "Example"}, sources) == payload
+        assert len(bodies) == 1
+        assert "tools" not in bodies[0] and "tool_choice" not in bodies[0]
+        assert bodies[0]["response_format"] == {"type": "json_object"}
+        context = json.loads(bodies[0]["messages"][1]["content"])
+        assert context["当前岗位"]["id"] == "j1"
+        assert context["公司资料"] == sources and context["source_ids"] == ["e1"]
+        assert run.config.prompts.greeting not in str(context)
     finally:
         await ai.close()
 
 
-async def test_loop_returns_real_observations_and_keeps_reasoning_out_of_history(
+async def test_loop_passes_current_observations_without_model_action_history(
     config, snapshot, job, storage, tmp_path
 ):
     from boss_say_hello.agent.engine import AgentEngine
 
-    executor, *_ = environment(config, snapshot, job, storage, tmp_path)
-
-    def decision(name, **args):
-        return {
-            "role": "assistant",
-            "reasoning_content": "PRIVATE_THOUGHT",
-            "tool_calls": [
-                {
-                    "id": name,
-                    "type": "function",
-                    "function": {"name": name, "arguments": json.dumps({"reason": "合成决策", **args})},
-                }
-            ],
-        }
-
-    ai = SimpleNamespace(
-        decide=AsyncMock(side_effect=[decision("inspect_preferences"), decision("skip_job", job_id="j1")])
-    )
-    await AgentEngine(executor, ai).run()
-    second = ai.decide.call_args_list[1].args[0]
-    assert any(m.get("tool_call_id") == "inspect_preferences" and "doc" in m["content"] for m in second)
-    events = storage.events(executor.run.id)
+    ex, *_ = environment(config, snapshot, job, storage, tmp_path)
+    ai = evaluator()
+    await AgentEngine(ex, ai).run()
+    run, current, company, sources = ai.evaluate_job.await_args.args
+    assert run is ex.run and current.id == "j1" and company["name"] == "Example"
+    assert sources[0]["id"] == "e1"
+    events = storage.events(ex.run.id)
     assert events[-1].payload["status"] == "completed"
-    assert [e.payload.get("phase") for e in events if e.kind == "state"] == [
-        "page_read",
-        "verify",
-        "page_read",
-        "model_wait",
-        "page_read",
-        "model_wait",
-        "record",
+    actions = [e.payload["tool"] for e in events if e.kind == "tool_action"]
+    assert actions == [
+        "inspect_preferences",
+        "verify_preferences",
+        "list_jobs",
+        "read_job",
+        "search_company",
+        "assess_job",
+        "draft_greeting",
     ]
-    assert "PRIVATE_THOUGHT" not in str(events)
 
 
 async def test_duplicate_company_query_preserves_same_evidence_score_and_greeting(
@@ -237,30 +229,16 @@ async def test_duplicate_company_query_preserves_same_evidence_score_and_greetin
     assert executor.search.search.await_count == 1
 
 
-async def test_repeated_model_decisions_skip_job_at_twelve_without_any_contact(
-    config, snapshot, job, storage, tmp_path
-):
+async def test_exhausted_model_budget_skips_job_without_any_contact(config, snapshot, job, storage, tmp_path):
     from boss_say_hello.agent.engine import AgentEngine
 
-    executor, _, _, delivery, _ = environment(config, snapshot, job, storage, tmp_path)
-    ai = SimpleNamespace(
-        decide=AsyncMock(
-            return_value={
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "a",
-                        "type": "function",
-                        "function": {"name": "inspect_preferences", "arguments": '{"reason":"检查"}'},
-                    }
-                ],
-            }
-        )
-    )
-    await AgentEngine(executor, ai).run()
-    assert storage.events(executor.run.id)[-1].payload["status"] == "completed"
-    assert ai.decide.await_count == 12
-    assert "j1" in executor.done
+    ex, _, _, delivery, _ = environment(config, snapshot, job, storage, tmp_path)
+    ex.job_steps["j1"] = 12
+    ai = evaluator()
+    await AgentEngine(ex, ai).run()
+    assert storage.events(ex.run.id)[-1].payload["status"] == "completed"
+    ai.evaluate_job.assert_not_called()
+    assert "j1" in ex.done
     delivery.deliver.assert_not_called()
 
 

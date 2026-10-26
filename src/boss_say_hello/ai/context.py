@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict
 
-from boss_say_hello.ai.prompts import BOUNDARY, GREETING_SCHEMA, SCORE_SCHEMA
+from boss_say_hello.ai.prompts import BOUNDARY, GREETING_SCHEMA
 from boss_say_hello.ai.schemas import AiFailure
 from boss_say_hello.greetings.salutation import salutation
 from boss_say_hello.greetings.service import GREETING_MAX_LENGTH
@@ -26,25 +26,6 @@ def facts(run, job):
 
 
 class ContextBuilder:
-    @staticmethod
-    def assessment_messages(run, job):
-        return budget(
-            [
-                {"role": "system", "content": BOUNDARY + SCORE_SCHEMA},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "偏好提示词": run.config.prompts.preference,
-                            "评分提示词": run.config.prompts.scoring,
-                            "资料": facts(run, job),
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        )
-
     @staticmethod
     def greeting_messages(run, job, assessment):
         return budget(

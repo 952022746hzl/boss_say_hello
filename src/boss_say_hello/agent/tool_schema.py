@@ -55,46 +55,17 @@ BACKGROUND = obj(
         source_ids=STRINGS,
     )
 )
-DEFINITIONS = {
-    "open_preferences": (
-        "打开岗位推荐页，读取账号已有求职标签；仅在条件设置阶段使用",
-        {},
-    ),
-    "inspect_preferences": ("读取已有求职标签控件；只能操作返回的控件 ID", {}),
-    "preference_action": (
-        "操作本次观察返回的控件 ID；只点击已有求职标签。不得猜测 ID 或用选项序号代替 ID；返回新快照后旧 ID 失效。不新增或编辑求职期望",
-        dict(option_id=TEXT),
-    ),
-    "verify_preferences": ("核对目标职位和城市对应的求职标签是否实际生效", {}),
-    "list_jobs": ("读取下一批候选岗位卡片，页面确认到底时返回 ended", {}),
-    "read_job": ("读取已发现岗位的完整职责和公司线索", dict(job_id=TEXT)),
-    "search_company": (
-        "每公司一次综合查询主体、业务和外包用工线索，返回可引用来源；无证据保持待确认，不重复查询",
-        dict(job_id=TEXT),
-    ),
-    "assess_job": (
-        "根据真实岗位和已读取来源提交岗位分与背景判断，程序计算最终分并执行硬排除",
-        dict(job_id=TEXT, assessment=ASSESSMENT, background=BACKGROUND),
-    ),
-    "draft_greeting": (
-        "根据已确认简历、当前岗位和评分生成招呼语，预览模式在此结束岗位处理",
-        dict(job_id=TEXT),
-    ),
-    "send_greeting": (
-        "请求发送已有招呼语；发送开关及所有校验通过才会执行，结果未知不得重试",
-        dict(job_id=TEXT),
-    ),
-    "skip_job": ("跳过已发现岗位并记录原因", dict(job_id=TEXT)),
-    "finish": ("仅当所有候选已处理且列表确认无更多岗位时结束；不能用来放弃未处理的岗位", {}),
+# Only program-issued actions remain. Models return EVALUATION_SCHEMA data,
+# never this action table or executable tool choices.
+ACTION_SCHEMAS = {
+    "inspect_preferences": {},
+    "preference_action": dict(option_id=TEXT),
+    "verify_preferences": {},
+    "list_jobs": {},
+    "read_job": dict(job_id=TEXT),
+    "search_company": dict(job_id=TEXT),
+    "assess_job": dict(job_id=TEXT, assessment=ASSESSMENT, background=BACKGROUND),
+    "draft_greeting": dict(job_id=TEXT),
+    "send_greeting": dict(job_id=TEXT),
+    "skip_job": dict(job_id=TEXT),
 }
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": obj({"reason": TEXT, **properties}),
-        },
-    }
-    for name, (description, properties) in DEFINITIONS.items()
-]

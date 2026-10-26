@@ -53,8 +53,8 @@ async def test_endpoint_change_never_reuses_other_provider_key(tmp_path, config,
     await b.close()
 
 
-async def test_pause_before_any_contact_preserves_current_job(setup_engine, snapshot, config):
-    x = setup_engine()
+async def test_pause_before_any_contact_preserves_current_job(setup_agent, snapshot, agent_config):
+    x = setup_agent(snapshot(config=agent_config(auto_send=True)))
     original = x.browser.refresh_job
     paused = asyncio.Event()
     once = True
@@ -71,8 +71,8 @@ async def test_pause_before_any_contact_preserves_current_job(setup_engine, snap
             paused.set()
 
     x.browser.refresh_job = refresh
-    x.engine.emit = emit
-    task = asyncio.create_task(x.engine.run(snapshot(config=config(auto_send=True)), x.control))
+    x.executor.emit = emit
+    task = asyncio.create_task(x.engine.run())
     await asyncio.wait_for(paused.wait(), 1)
     assert not x.browser.calls
     x.control.pause_requested.clear()
@@ -115,8 +115,8 @@ async def test_new_default_message_requires_visible_ack(storage, snapshot, confi
     assert result[-1].payload["status"] == "needs_default_ack"
 
 
-async def test_default_message_resume_keeps_current_job(setup_engine, snapshot, config):
-    x = setup_engine()
+async def test_default_message_resume_keeps_current_job(setup_agent, snapshot, agent_config):
+    x = setup_agent(snapshot(config=agent_config(auto_send=True)))
     x.browser.behavior = "default_message"
     visible = asyncio.Event()
 
@@ -124,8 +124,8 @@ async def test_default_message_resume_keeps_current_job(setup_engine, snapshot, 
         if event.kind == "state" and event.payload.get("requires_default_ack"):
             visible.set()
 
-    x.engine.emit = emit
-    task = asyncio.create_task(x.engine.run(snapshot(config=config(auto_send=True)), x.control))
+    x.executor.emit = emit
+    task = asyncio.create_task(x.engine.run())
     await asyncio.wait_for(visible.wait(), 1)
     assert not x.browser.calls and x.journal.contact_count("r1") == 0
     x.control.default_message_acknowledged.set()

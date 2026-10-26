@@ -20,13 +20,3 @@ def validate_greeting(greeting, max_length):
     if length > max_length:
         return CheckResult("reject", (f"招呼语为 {length} 个字符，超过本次发送上限 {max_length}；未发送",))
     return CheckResult("pass")
-
-
-class GreetingService:
-    def __init__(self, ai):
-        self.ai = ai
-
-    async def generate(self, run, job, assessment):
-        if not run.resume.confirmed or assessment.score < run.config.min_score:
-            raise ValueError("简历未确认或匹配分不足")
-        return await self.ai.greet(run, job, assessment)
