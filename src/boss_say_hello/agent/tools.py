@@ -8,7 +8,7 @@ from boss_say_hello.ai.schemas import parse_assessment
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure, JobUnavailable
 from boss_say_hello.browser.preferences import compact
 from boss_say_hello.diagnostics import record, scope
-from boss_say_hello.domain import RunEvent
+from boss_say_hello.domain import MAX_JOB_DECISIONS, RunEvent
 from boss_say_hello.matching.rules import check_job
 
 
@@ -37,6 +37,16 @@ class ToolExecutor:
         event = RunEvent(self.run.id, kind, payload)
         self.store.append_event(event)
         self.emit(event)
+
+    def publish_progress(self):
+        self.publish(
+            "progress",
+            successes=self.journal.success_count(self.run.id),
+            contacts=self.journal.contact_count(self.run.id),
+            contact_limit=self.run.config.max_contacts,
+            discovered=self.discovered_count(),
+            handled=len(self.done),
+        )
 
     async def guard(self):
         if self.control.closing.is_set() or self.control.pause_requested.is_set():
@@ -68,11 +78,6 @@ class ToolExecutor:
             if not isinstance(jid, str) or jid not in self.jobs or jid in self.done:
                 raise ValueError("岗位未读取或已完成处理")
             self.focus_job = jid
-            steps = self.job_steps.get(jid, 0) + 1
-            self.job_steps[jid] = steps
-            if steps > self.run.config.max_job_steps:
-                self.done.add(jid)
-                raise ValueError("单岗位决策步数已达到上限")
         self.publish(
             "state",
             status="running",
@@ -160,17 +165,11 @@ class ToolExecutor:
             self.control.pause_requested.set()
             raise BrowserFailure("求职标签已变化，已暂停；继续本轮时将重新核验配置中的标签")
         self.discovered_ids.update(self.jobs)
-        remaining = self.run.config.max_candidates - self.discovered_count()
-        if remaining <= 0:
-            self.list_ended = True
-            return {"jobs": [], "ended": True, "reason": "候选上限"}
         batch = await self.browser.candidate_batch()
         fresh = []
         for job in batch["jobs"]:
             if job.account_id != self.run.account_id or not job.id or job.id in self.discovered_ids:
                 continue
-            if self.discovered_count() >= self.run.config.max_candidates:
-                break
             self.jobs[job.id] = job
             self.discovered_ids.add(job.id)
             self.publish("job", job_id=job.id, job=asdict(job))
@@ -179,7 +178,7 @@ class ToolExecutor:
                 self.publish("check", job_id=job.id, status="skipped", reasons=["本地已联系或结果未知"])
                 continue
             fresh.append(asdict(job))
-        self.list_ended = batch["ended"] or self.discovered_count() >= self.run.config.max_candidates
+        self.list_ended = batch["ended"]
         return {"jobs": fresh, "ended": self.list_ended}
 
     def active_job_id(self):
@@ -272,7 +271,7 @@ class ToolExecutor:
         for jid in list(self.jobs):
             if jid in self.done or jid == sending_job_id:
                 self.discard_job_context(jid)
-        self.list_ended = self.discovered_count() >= self.run.config.max_candidates
+        self.list_ended = False
         self.candidates_need_sync = False
         record("agent.candidates.synced", count=len(stale))
 
@@ -310,18 +309,14 @@ class ToolExecutor:
         self.companies[job_id] = company
         identity = {k: company.get(k, "") for k in ("id", "name", "city", "url")}
         key = self.cache.key(identity)
-        sources = [
-            s
-            for s in self.cache.get(identity, self.run.config.company_cache_days) or []
-            if s.get("angle") == "overview"
-        ]
+        sources = [s for s in self.cache.get(identity) or [] if s.get("angle") == "overview"]
         if not sources and self.search_counts.get(key, 0) < 1:
             self.search_counts[key] = 1
             found = await self.search.search(company)
             sources = [{**source, "angle": "overview"} for source in found]
             if sources:
                 self.cache.put(identity, sources)
-                sources = self.cache.get(identity, self.run.config.company_cache_days) or []
+                sources = self.cache.get(identity) or []
         self.sources[job_id] = sources
         self.publish("company_sources", job_id=job_id, company=company, sources=sources)
         return {
@@ -403,8 +398,8 @@ class ToolExecutor:
             self.receipt = None
             self.control.pause_requested.set()
             raise BrowserFailure("求职标签已变化，本次不发送；继续本轮时将恢复并核验目标标签")
-        if self.journal.contact_count(self.run.id) >= self.run.config.max_contacts:
-            raise ValueError("本轮发送上限已达到")
+        if self.journal.success_count(self.run.id) >= self.run.config.max_contacts:
+            raise ValueError("本轮成功发送目标已达到")
         if self.clock.monotonic() < self.deadline:
             return {"status": "waiting", "seconds": round(self.deadline - self.clock.monotonic(), 1)}
         await self.guard()
@@ -457,7 +452,39 @@ class ToolExecutor:
         self.publish("check", job_id=job_id, status="skipped", reasons=["AI 决定跳过，理由见步骤记录"])
         return {"status": "skipped"}
 
+    def begin_decision(self, jid):
+        steps = self.job_steps.get(jid, 0)
+        if steps >= MAX_JOB_DECISIONS:
+            self.done.add(jid)
+            self.publish(
+                "check",
+                job_id=jid,
+                status="pending",
+                reasons=["单岗位已达到固定 12 步，跳过并继续其他岗位；不会自动重试发送"],
+            )
+            return False
+        self.job_steps[jid] = steps + 1
+        return True
+
     async def finish(self):
+        if self.active_job_id() is not None:
+            raise EligibilityBlocked(
+                self.active_job_id(),
+                {
+                    "status": "pending",
+                    "code": "unfinished_jobs",
+                    "reason": "当前岗位尚未处理完；请使用已提供的工具继续，或明确跳过当前岗位，不能结束整轮",
+                },
+            )
+        if not self.list_ended or self.candidates_need_sync:
+            raise EligibilityBlocked(
+                None,
+                {
+                    "status": "pending",
+                    "code": "more_candidates",
+                    "reason": "仍可能有更多候选岗位，请继续读取列表，不能提前结束整轮",
+                },
+            )
         self.finished = True
         return {"status": "finished", "discovered": self.discovered_count(), "handled": len(self.done)}
 
@@ -481,6 +508,10 @@ class ToolExecutor:
             "handled_count": len(self.done),
             "discovered_count": self.discovered_count(),
             "list_ended": self.list_ended,
+            "contact_limit": self.run.config.max_contacts,
+            "contacts": self.journal.contact_count(self.run.id),
+            "successes": self.journal.success_count(self.run.id),
+            "job_decisions_remaining": max(0, MAX_JOB_DECISIONS - self.job_steps.get(jid, 0)),
             "jobs": [
                 {
                     "id": jid,

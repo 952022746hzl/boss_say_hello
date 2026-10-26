@@ -31,6 +31,9 @@ class PromptSet:
 只返回规定格式中的招呼语正文及对应简历依据，不额外解释。"""
 
 
+MAX_JOB_DECISIONS = 12
+
+
 @dataclass(frozen=True)
 class AppConfig:
     revision: int = 0
@@ -49,10 +52,6 @@ class AppConfig:
     target_title: str = ""
     outsourcing_check: bool = True
     background_weight: int = 20
-    max_candidates: int = 30
-    max_agent_steps: int = 300
-    max_job_steps: int = 12
-    company_cache_days: int = 7
 
     def validate(self, *, ready: bool = False) -> None:
         if not isinstance(self.target_title, str) or len(self.target_title) > 100:
@@ -61,15 +60,6 @@ class AppConfig:
             raise ValueError("外包检查开关无效")
         if type(self.background_weight) is not int or not 0 <= self.background_weight <= 100:
             raise ValueError("背景权重必须为 0 到 100 的整数")
-        for name, ceiling in (
-            ("max_candidates", 1000),
-            ("max_agent_steps", 3000),
-            ("max_job_steps", 100),
-            ("company_cache_days", 30),
-        ):
-            value = getattr(self, name)
-            if type(value) is not int or not 1 <= value <= ceiling:
-                raise ValueError(f"{name} 必须为 1 到 {ceiling} 的整数")
         if type(self.model_timeout_seconds) is not int or not 10 <= self.model_timeout_seconds <= 1800:
             raise ValueError("模型等待时间必须为 10 到 1800 秒之间的整数")
         for value in (self.salary_min, self.salary_max):
@@ -80,7 +70,7 @@ class AppConfig:
         if type(self.min_score) is not int or not 0 <= self.min_score <= 100:
             raise ValueError("匹配分必须在0到100之间")
         if type(self.max_contacts) is not int or self.max_contacts < 1:
-            raise ValueError("每轮上限必须为正整数")
+            raise ValueError("每轮成功发送目标必须为正整数")
         if (
             isinstance(self.interval_seconds, bool)
             or not isfinite(self.interval_seconds)

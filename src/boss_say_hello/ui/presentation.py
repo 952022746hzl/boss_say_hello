@@ -12,7 +12,7 @@ LABELS = {
     "paused": "已暂停",
     "running": "运行中",
     "completed": "列表处理完成",
-    "limit_reached": "已达到本轮联系上限",
+    "limit_reached": "已达到本轮成功发送目标",
     "stopped": "已停止",
     "interrupted": "运行中断",
     "pass": "符合硬条件",

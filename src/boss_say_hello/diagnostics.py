@@ -51,6 +51,11 @@ FIELDS = {
     "status",
     "score",
     "count",
+    "successes",
+    "contacts",
+    "contact_limit",
+    "discovered",
+    "handled",
     "duration_ms",
     "read_timeout_seconds",
     "finish_reason",
@@ -119,6 +124,7 @@ MESSAGES = {
     "delivery.result": "发送步骤结果已落盘",
     "run.started": "本轮任务开始",
     "run.finished": "本轮任务结束",
+    "run.progress": "本轮发送进度",
     "run.job": "读取到岗位",
     "run.check": "岗位硬条件检查",
     "run.assessment": "匹配评分完成",
@@ -207,6 +213,11 @@ class EventLog:
             message = f"第 {fields.get('step', '?')} 步｜{PHASE_LABELS.get(fields['phase'], fields['phase'])}"
             if fields.get("tool"):
                 message += "：" + TOOL_LABELS.get(fields["tool"], fields["tool"])
+        elif event in {"run.progress", "run.finished"} and "successes" in fields:
+            message = (fields.get("reason") or message) + (
+                f" · 成功 {fields['successes']}/{fields['contact_limit']} 个岗位"
+                f" · 尝试 {fields['contacts']} · 已发现 {fields.get('discovered', 0)} · 已处理 {fields.get('handled', 0)}"
+            )
         elif event == "run.tool_action":
             message = (
                 "程序执行：" if fields.get("actor") == "program" else "AI 决定执行："
@@ -279,8 +290,10 @@ class EventLog:
             fields["char_count"] = len(p["version"].summary)
         elif event.kind == "greeting":
             fields["char_count"] = len(p["text"])
-        elif event.kind == "finished":
-            fields["count"] = p["contacts"]
+        elif event.kind in {"finished", "progress"}:
+            for key in ("contacts", "successes", "contact_limit", "discovered", "handled", "reason"):
+                if key in p:
+                    fields[key] = p[key]
         elif event.kind == "platform":
             fields["status"] = p["caps"].initial_contact_behavior
         if event.kind in ("notice", "ui_error", "log", "logs_ready", "credential"):

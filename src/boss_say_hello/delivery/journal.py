@@ -19,12 +19,24 @@ class DeliveryJournal:
             "SELECT COUNT(*) FROM contacts WHERE run_id=? AND cancelled=0", (run_id,)
         ).fetchone()[0]
 
+    def success_count(self, run_id):
+        # Count only this run's verified text deliveries; attempts remain for deduplication.
+        return self.db.execute(
+            """SELECT COUNT(*) FROM contacts c
+               WHERE c.run_id=? AND c.cancelled=0
+                 AND EXISTS (SELECT 1 FROM delivery_attempts d WHERE d.contact_id=c.id
+                             AND d.stage='contact' AND d.outcome='succeeded')
+                 AND EXISTS (SELECT 1 FROM delivery_attempts d WHERE d.contact_id=c.id
+                             AND d.stage='message' AND d.outcome='succeeded')""",
+            (run_id,),
+        ).fetchone()[0]
+
     def reserve(self, run, job):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             if (
                 not self.eligible(run.account_id, job.id)
-                or self.contact_count(run.id) >= run.config.max_contacts
+                or self.success_count(run.id) >= run.config.max_contacts
             ):
                 return None
             id = uuid4().hex

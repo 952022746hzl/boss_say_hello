@@ -97,7 +97,7 @@ async def test_repeated_bad_evidence_becomes_pending_without_more_assessments(
     await AgentEngine(ex, ai).run()
     assert "j1" in ex.done
     assert "j1" not in ex.assessments and "j1" not in ex.greetings
-    assert {t["function"]["name"] for t in ai.decide.call_args_list[2].args[1]} == {"finish"}
+    assert ai.decide.await_count == 2
     events = storage.events(ex.run.id)
     assert any(e.kind == "check" and e.payload.get("status") == "pending" for e in events)
     ex.delivery.deliver.assert_not_called()
@@ -128,7 +128,7 @@ async def test_malformed_assessment_arguments_also_stop_after_one_correction(
 async def test_exhausted_job_does_not_consume_next_jobs_correction(config, snapshot, job, storage, tmp_path):
     ex = await ready(config, snapshot, job, storage, tmp_path)
     ex.jobs["j2"] = job(id="j2")
-    ex.job_steps["j1"] = ex.run.config.max_job_steps
+    ex.job_steps["j1"] = 12
     ex.browser.refresh_job.return_value = job(id="j2")
     invalid = assessment_args()
     invalid["job_id"] = "j2"
@@ -136,16 +136,15 @@ async def test_exhausted_job_does_not_consume_next_jobs_correction(config, snaps
     ai = SimpleNamespace(
         decide=AsyncMock(
             side_effect=[
-                decision("assess_job", **assessment_args()),
                 decision("read_job", job_id="j2"),
                 decision("search_company", job_id="j2"),
                 decision("assess_job", **invalid),
-                decision("finish"),
+                decision("skip_job", job_id="j2"),
             ]
         )
     )
     await AgentEngine(ex, ai).run()
-    assert "j1" in ex.done and "j2" not in ex.done
+    assert "j1" in ex.done and "j2" in ex.done
     assert ex.model_failures[("j2", "assess_job")] == 1
 
 
@@ -155,7 +154,7 @@ async def test_multiple_calls_in_one_response_consume_only_one_correction(
     ex = await ready(config, snapshot, job, storage, tmp_path)
     message = decision("assess_job", **assessment_args())
     message["tool_calls"] *= 3
-    ai = SimpleNamespace(decide=AsyncMock(side_effect=[message, decision("finish")]))
+    ai = SimpleNamespace(decide=AsyncMock(side_effect=[message, decision("skip_job", job_id="j1")]))
     await AgentEngine(ex, ai).run()
-    assert "j1" not in ex.done and "j1" not in ex.assessments
+    assert "j1" in ex.done and "j1" not in ex.assessments
     assert ex.model_failures[("j1", "assess_job")] == 1

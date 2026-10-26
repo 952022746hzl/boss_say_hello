@@ -50,7 +50,7 @@ async def test_backend_runs_agent_to_preview(config, snapshot, job, storage, tmp
     try:
         await backend.run(ex.run.config, resume(), ex.control)
         assert any(e.kind == "greeting" for e in events)
-        assert any(e.kind == "finished" and e.payload["status"] == "agent_finished" for e in events)
+        assert any(e.kind == "finished" and e.payload["status"] == "completed" for e in events)
         assert not backend.journal.contact_count(events[-1].run_id)
     finally:
         await backend.close()

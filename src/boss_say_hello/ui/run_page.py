@@ -44,6 +44,8 @@ class RunPage(QWidget):
         self.status = QLabel("先登录 → 配置模型和规则 → 导入并确认简历 → 确认自动发送开关 → 开始本轮")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.progress = QLabel("成功发送 0；按岗位计数，失败和未知不计入成功目标")
+        layout.addWidget(self.progress)
         self.steps = QPlainTextEdit()
         self.steps.setReadOnly(True)
         self.steps.setPlaceholderText("这里显示 AI 每一步的行动、简短理由和执行结果")
@@ -115,6 +117,7 @@ class RunPage(QWidget):
         p = event.payload
         if event.kind == "started":
             self.clear_results()
+            self.progress.setText("成功发送 0；本轮开始，按岗位计数")
             self.run_id = event.run_id
             self.active = True
             self.set_ready(self.ready)
@@ -133,7 +136,11 @@ class RunPage(QWidget):
             self.stopping = True
             self.set_ready(self.ready)
             self.status.setText(
-                f"{LABELS.get(p['status'], p['status'])} · 本轮联系/未知占额 {p['contacts']} · 记录可在本地历史查看"
+                f"{p.get('reason') or LABELS.get(p['status'], p['status'])} · 联系尝试 {p['contacts']} · 记录可在本地历史查看"
+            )
+        if event.kind in {"progress", "finished"} and "successes" in p:
+            self.progress.setText(
+                f"成功发送 {p['successes']} / {p['contact_limit']} 个岗位 · 联系尝试 {p['contacts']} · 已发现 {p.get('discovered', 0)} · 已处理 {p.get('handled', 0)}"
             )
         if event.kind == "error":
             self.status.setText(p["reason"])

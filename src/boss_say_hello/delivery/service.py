@@ -72,7 +72,7 @@ class DeliveryService:
         self.browser.bind_control(control)
         attempt = self.journal.reserve(run, job)
         if not attempt:
-            return event("skipped", reason="已联系或已达本轮上限")
+            return event("skipped", reason="已联系、结果待核实或已达本轮成功发送目标")
         actions = [
             ("contact", lambda: self.browser.open_contact(job)),
             ("message", lambda: self.browser.send_text(job, greeting.text)),

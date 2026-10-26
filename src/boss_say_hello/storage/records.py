@@ -129,6 +129,16 @@ class RecordStore:
                     metadata.setdefault("steps", []).append({"kind": event.kind, **payload})
                 if event.kind == "finished":
                     metadata["status"] = payload["status"]
+                    for field in (
+                        "successes",
+                        "contacts",
+                        "contact_limit",
+                        "discovered",
+                        "handled",
+                        "reason",
+                    ):
+                        if field in payload:
+                            metadata[field] = payload[field]
                 job_id = payload.get("job_id")
                 if not job_id:
                     continue

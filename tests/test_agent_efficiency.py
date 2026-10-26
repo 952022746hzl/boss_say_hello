@@ -18,7 +18,7 @@ async def test_target_setup_and_first_batch_do_not_require_model_calls(
                     {
                         "id": "f",
                         "type": "function",
-                        "function": {"name": "finish", "arguments": '{"reason":"完成"}'},
+                        "function": {"name": "skip_job", "arguments": '{"reason":"完成","job_id":"j1"}'},
                     }
                 ],
             }
@@ -80,7 +80,7 @@ async def test_pause_during_tag_setup_can_resume(config, snapshot, job, storage,
                     {
                         "id": "f",
                         "type": "function",
-                        "function": {"name": "finish", "arguments": '{"reason":"完成"}'},
+                        "function": {"name": "skip_job", "arguments": '{"reason":"完成","job_id":"j1"}'},
                     }
                 ],
             }
@@ -93,7 +93,7 @@ async def test_pause_during_tag_setup_can_resume(config, snapshot, job, storage,
         ai.decide.assert_not_called()
         ex.control.pause_requested.clear()
         await asyncio.wait_for(task, 2)
-        assert storage.events(ex.run.id)[-1].payload["status"] == "agent_finished"
+        assert storage.events(ex.run.id)[-1].payload["status"] == "completed"
     finally:
         ex.control.closing.set()
         await task

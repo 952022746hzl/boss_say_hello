@@ -66,7 +66,7 @@ DEFINITIONS = {
         dict(option_id=TEXT),
     ),
     "verify_preferences": ("核对目标职位和城市对应的求职标签是否实际生效", {}),
-    "list_jobs": ("读取下一批候选岗位卡片，达到候选上限或到底时返回 ended", {}),
+    "list_jobs": ("读取下一批候选岗位卡片，页面确认到底时返回 ended", {}),
     "read_job": ("读取已发现岗位的完整职责和公司线索", dict(job_id=TEXT)),
     "search_company": (
         "每公司一次综合查询主体、业务和外包用工线索，返回可引用来源；无证据保持待确认，不重复查询",
@@ -85,7 +85,7 @@ DEFINITIONS = {
         dict(job_id=TEXT),
     ),
     "skip_job": ("跳过已发现岗位并记录原因", dict(job_id=TEXT)),
-    "finish": ("结束本轮并说明已完成事项、剩余事项或无法继续的原因", {}),
+    "finish": ("仅当所有候选已处理且列表确认无更多岗位时结束；不能用来放弃未处理的岗位", {}),
 }
 TOOLS = [
     {

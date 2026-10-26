@@ -40,14 +40,13 @@ class AgentSettings(QWidget):
         )
         note.setWordWrap(True)
         form.addRow(note)
+        form.addRow(
+            QLabel(
+                "每轮持续筛选至成功发送目标或列表结束；单岗位最多 12 步。公司查询资料永久缓存，每个岗位重新判断。"
+            )
+        )
         self.limits = {}
-        for key, label, low, high, suffix in (
-            ("background_weight", "公司背景权重", 0, 100, " %"),
-            ("max_candidates", "每轮候选上限", 1, 1000, " 个"),
-            ("max_agent_steps", "每轮 AI 决策上限", 1, 3000, " 步"),
-            ("max_job_steps", "单岗位决策上限", 1, 100, " 步"),
-            ("company_cache_days", "公司资料缓存有效期", 1, 30, " 天"),
-        ):
+        for key, label, low, high, suffix in (("background_weight", "公司背景权重", 0, 100, " %"),):
             field = QSpinBox()
             field.setRange(low, high)
             field.setSuffix(suffix)

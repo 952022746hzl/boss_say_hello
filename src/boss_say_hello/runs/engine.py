@@ -65,7 +65,7 @@ class RunEngine:
         iterator = self.browser.iter_recommended().__aiter__()
         try:
             while await self.ready(run, control):
-                if run.config.auto_send and self.journal.contact_count(run.id) >= run.config.max_contacts:
+                if run.config.auto_send and self.journal.success_count(run.id) >= run.config.max_contacts:
                     status = "limit_reached"
                     break
                 try:
@@ -148,6 +148,13 @@ class RunEngine:
             await iterator.aclose()
             self.publish(
                 RunEvent(
-                    run.id, "finished", {"status": status, "contacts": self.journal.contact_count(run.id)}
+                    run.id,
+                    "finished",
+                    {
+                        "status": status,
+                        "contacts": self.journal.contact_count(run.id),
+                        "successes": self.journal.success_count(run.id),
+                        "contact_limit": run.config.max_contacts,
+                    },
                 )
             )

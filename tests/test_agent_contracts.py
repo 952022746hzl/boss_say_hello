@@ -15,9 +15,7 @@ def test_agent_config_persists_with_safe_defaults(tmp_path):
     assert loaded.target_title == "Java"
 
 
-@pytest.mark.parametrize(
-    "change", [{"background_weight": True}, {"max_agent_steps": 0}, {"outsourcing_check": "false"}]
-)
+@pytest.mark.parametrize("change", [{"background_weight": True}, {"outsourcing_check": "false"}])
 def test_agent_config_rejects_invalid_values(change):
     from boss_say_hello.domain import AppConfig
 

@@ -100,7 +100,7 @@ async def test_limit_interval_and_snapshot(setup_engine, snapshot, config, job):
     assert x.journal.contact_count(run.id) == 2
 
 
-async def test_pause_resume_keeps_quota(setup_engine, snapshot, config, job):
+async def test_pause_resume_keeps_success_goal_and_skips_partial_contact(setup_engine, snapshot, config, job):
     x = setup_engine([job(id=f"j{i}") for i in range(3)])
     paused = asyncio.Event()
 
@@ -119,8 +119,9 @@ async def test_pause_resume_keeps_quota(setup_engine, snapshot, config, job):
     assert x.browser.calls == ["contact"]
     x.control.pause_requested.clear()
     await asyncio.wait_for(task, 1)
-    assert x.browser.calls == ["contact", "contact", "message"]
-    assert x.journal.contact_count(run.id) == 2
+    assert x.browser.calls == ["contact", "contact", "message", "contact", "message"]
+    assert x.journal.contact_count(run.id) == 3
+    assert x.journal.success_count(run.id) == 2
 
 
 async def test_account_switch_pauses(setup_engine, snapshot):

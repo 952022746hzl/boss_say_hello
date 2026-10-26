@@ -138,7 +138,7 @@ class SettingsPage(QWidget):
         self.interval.setRange(0.1, 86400)
         self.interval.setSuffix(" 秒")
         limits.addRow(required_label("最低匹配分"), self.min_score)
-        limits.addRow(required_label("每轮联系上限"), self.max_contacts)
+        limits.addRow(required_label("每轮成功发送目标（岗位数）"), self.max_contacts)
         limits.addRow(required_label("联系间隔"), self.interval)
         self.auto_send = QCheckBox("自动发送（点击开始后按本轮快照执行）")
         limits.addRow(self.auto_send)

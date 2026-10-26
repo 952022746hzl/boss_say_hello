@@ -190,7 +190,7 @@ async def test_loop_returns_real_observations_and_keeps_reasoning_out_of_history
 
     executor, *_ = environment(config, snapshot, job, storage, tmp_path)
 
-    def decision(name):
+    def decision(name, **args):
         return {
             "role": "assistant",
             "reasoning_content": "PRIVATE_THOUGHT",
@@ -198,17 +198,19 @@ async def test_loop_returns_real_observations_and_keeps_reasoning_out_of_history
                 {
                     "id": name,
                     "type": "function",
-                    "function": {"name": name, "arguments": '{"reason":"合成决策"}'},
+                    "function": {"name": name, "arguments": json.dumps({"reason": "合成决策", **args})},
                 }
             ],
         }
 
-    ai = SimpleNamespace(decide=AsyncMock(side_effect=[decision("inspect_preferences"), decision("finish")]))
+    ai = SimpleNamespace(
+        decide=AsyncMock(side_effect=[decision("inspect_preferences"), decision("skip_job", job_id="j1")])
+    )
     await AgentEngine(executor, ai).run()
     second = ai.decide.call_args_list[1].args[0]
     assert any(m.get("tool_call_id") == "inspect_preferences" and "doc" in m["content"] for m in second)
     events = storage.events(executor.run.id)
-    assert events[-1].payload["status"] == "agent_finished"
+    assert events[-1].payload["status"] == "completed"
     assert [e.payload.get("phase") for e in events if e.kind == "state"] == [
         "page_read",
         "verify",
@@ -235,10 +237,12 @@ async def test_duplicate_company_query_preserves_same_evidence_score_and_greetin
     assert executor.search.search.await_count == 1
 
 
-async def test_loop_budget_ends_without_any_contact(config, snapshot, job, storage, tmp_path):
+async def test_repeated_model_decisions_skip_job_at_twelve_without_any_contact(
+    config, snapshot, job, storage, tmp_path
+):
     from boss_say_hello.agent.engine import AgentEngine
 
-    executor, _, _, delivery, _ = environment(config, snapshot, job, storage, tmp_path, max_agent_steps=2)
+    executor, _, _, delivery, _ = environment(config, snapshot, job, storage, tmp_path)
     ai = SimpleNamespace(
         decide=AsyncMock(
             return_value={
@@ -254,7 +258,9 @@ async def test_loop_budget_ends_without_any_contact(config, snapshot, job, stora
         )
     )
     await AgentEngine(executor, ai).run()
-    assert storage.events(executor.run.id)[-1].payload["status"] == "budget_reached"
+    assert storage.events(executor.run.id)[-1].payload["status"] == "completed"
+    assert ai.decide.await_count == 12
+    assert "j1" in executor.done
     delivery.deliver.assert_not_called()
 
 

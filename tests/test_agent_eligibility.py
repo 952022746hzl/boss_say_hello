@@ -48,7 +48,9 @@ async def test_model_request_for_blocked_greeting_is_explained_without_error(
         }
 
     ai = SimpleNamespace(
-        decide=AsyncMock(side_effect=[decision("draft_greeting", job_id="j1"), decision("finish")])
+        decide=AsyncMock(
+            side_effect=[decision("draft_greeting", job_id="j1"), decision("skip_job", job_id="j1")]
+        )
     )
     entries = []
     log = EventLog(tmp_path / "log", entries.append)

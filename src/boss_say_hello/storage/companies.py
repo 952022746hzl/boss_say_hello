@@ -16,13 +16,12 @@ class CompanyCache:
     def key(identity):
         return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
-    def get(self, identity, max_age_days):
+    def get(self, identity):
         row = self.data.get(self.key(identity))
         if row:
             sources = [
                 {**source, "cached_at": source.get("cached_at", row["queried_at"])}
                 for source in row["sources"]
-                if 0 <= self.clock() - source.get("cached_at", row["queried_at"]) <= max_age_days * 86400
             ]
             return sources or None
         return None
