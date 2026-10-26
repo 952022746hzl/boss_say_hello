@@ -1,3 +1,39 @@
+import json
+
+
+class SchemaValidationError(ValueError):
+    """A failure described only by trusted schema metadata and fixed type names."""
+
+    REASONS = {
+        "type": "字段类型无效",
+        "missing_field": "缺少必填字段",
+        "unexpected_fields": "包含未知字段",
+        "enum": "字段选项无效",
+        "max_items": "列表过长",
+        "min_length": "文本为空或过短",
+        "max_length": "文本过长",
+        "range": "数值超出范围",
+    }
+
+    def __init__(self, path, reason, expected, actual_type):
+        self.path = path
+        self.reason = reason
+        self.expected = expected
+        self.actual_type = actual_type
+        super().__init__(f"{path}：{self.REASONS[reason]}；预期 {expected}，实际类型 {actual_type}")
+
+
+_TYPES = {
+    "string": str,
+    "object": dict,
+    "array": list,
+    "integer": int,
+    "boolean": bool,
+    "null": type(None),
+}
+_TYPE_NAMES = {value: key for key, value in _TYPES.items()} | {float: "number"}
+
+
 def obj(properties):
     return {
         "type": "object",
@@ -9,36 +45,49 @@ def obj(properties):
 
 def validate_value(value, schema):
     """Validate the bounded schema subset used by our tools, including nested fields."""
+    _validate_value(value, schema, "$")
+
+
+def _validate_value(value, schema, path):
     kind = schema["type"]
     kinds = kind if isinstance(kind, list) else [kind]
-    expected = {
-        "string": str,
-        "object": dict,
-        "array": list,
-        "integer": int,
-        "boolean": bool,
-        "null": type(None),
-    }
-    if not any(type(value) is expected[k] for k in kinds):
-        raise ValueError("工具参数类型无效")
+    actual_type = _TYPE_NAMES.get(type(value), "unknown")
+    if not any(type(value) is _TYPES[k] for k in kinds):
+        raise SchemaValidationError(path, "type", " | ".join(kinds), actual_type)
     if "enum" in schema and value not in schema["enum"]:
-        raise ValueError("工具参数选项无效")
+        raise SchemaValidationError(path, "enum", json.dumps(schema["enum"], ensure_ascii=False), actual_type)
     if isinstance(value, dict):
-        if set(value) != set(schema["properties"]):
-            raise ValueError("工具参数缺失或包含未知字段")
-        for key, child in schema["properties"].items():
-            validate_value(value[key], child)
+        properties = schema["properties"]
+        # Paths and expected fields come from the trusted schema, never response keys.
+        for key, child in properties.items():
+            if key not in value:
+                child_kind = child["type"]
+                expected = " | ".join(child_kind) if isinstance(child_kind, list) else child_kind
+                raise SchemaValidationError(f"{path}.{key}", "missing_field", expected, "missing")
+        if len(value) != len(properties):
+            raise SchemaValidationError(
+                path, "unexpected_fields", "object（仅允许字段：" + ", ".join(properties) + "）", actual_type
+            )
+        for key, child in properties.items():
+            _validate_value(value[key], child, f"{path}.{key}")
     elif isinstance(value, list):
-        if len(value) > schema.get("maxItems", 100):
-            raise ValueError("工具参数列表过长")
-        for child in value:
-            validate_value(child, schema["items"])
+        maximum = schema.get("maxItems", 100)
+        if len(value) > maximum:
+            raise SchemaValidationError(path, "max_items", f"array（maxItems={maximum}）", actual_type)
+        for index, child in enumerate(value):
+            _validate_value(child, schema["items"], f"{path}[{index}]")
     elif isinstance(value, str):
-        if len(value) > schema.get("maxLength", 2000) or len(value.strip()) < schema.get("minLength", 0):
-            raise ValueError("工具参数文本为空或过长")
+        maximum, minimum = schema.get("maxLength", 2000), schema.get("minLength", 0)
+        if len(value) > maximum:
+            raise SchemaValidationError(path, "max_length", f"string（maxLength={maximum}）", actual_type)
+        if len(value.strip()) < minimum:
+            raise SchemaValidationError(
+                path, "min_length", f"string（去除首尾空白后 minLength={minimum}）", actual_type
+            )
     elif type(value) is int:
         if not schema.get("minimum", value) <= value <= schema.get("maximum", value):
-            raise ValueError("工具参数数值超出范围")
+            bounds = ", ".join(f"{key}={schema[key]}" for key in ("minimum", "maximum") if key in schema)
+            raise SchemaValidationError(path, "range", f"integer（{bounds}）", actual_type)
 
 
 TEXT = {"type": "string", "minLength": 1, "maxLength": 2000}
