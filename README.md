@@ -6,17 +6,19 @@
 
 ## 1. 安装和启动
 
-可以用打包好的 exe，也可以从源码启动。两种方式都需要安装 Chrome 浏览器，并准备好模型服务的 API 地址、模型名称和密钥。
+可以用打包好的 exe，也可以从源码启动。两种方式都需要联网使用 BOSS 和模型服务，并准备好 API 地址、模型名称和密钥。
 
-### 使用 exe（不需要安装 Python）
+### 使用 exe（不需要另装运行环境）
 
-把完整的 `BossSayHello` 文件夹放在自己可以读写的位置，然后双击里面的 `BossSayHello.exe`。请保留旁边的 `_internal` 文件夹，它是程序运行所需的依赖。
+适用于 Windows 10 / Windows 11 的 64 位电脑。把完整的 `BossSayHello` 文件夹放在自己可以读写的位置，然后双击里面的 `BossSayHello.exe`。
+
+包内已包含 Python、PyQt、相关库、运行所需的 VC++ DLL 和免安装浏览器，**不需要安装 Python、uv、pip、Chrome 或 ChromeDriver，也不需要配置环境变量**。请完整保留 `_internal` 和 `browser` 文件夹；只复制 exe 无法运行。
 
 首次启动会在 exe 旁创建 `workspace`，用于保存配置、缓存、简历和历史。以后双击同一个 exe 即可继续使用。通过快捷方式启动，数据位置也不会改变。
 
 ### 从源码启动
 
-需要 Python 3.11 或以上版本。
+需要 Python 3.11 或以上版本，以及本机 Chrome 浏览器。下面的安装命令只用于源码运行或自行打包，使用 dist 中的成品不用执行。
 
 第一次使用：打开 PowerShell，进入项目目录，依次执行：
 
@@ -44,7 +46,9 @@ Set-Location "E:\Boss\boss_say_hello"
 
 ### 自己打包 exe
 
-已安装 Python 和 uv 后，双击项目根目录的 **`build.bat`**。脚本会安装锁定版本的依赖并打包，完成后窗口会显示 exe 的完整路径。第一次需要联网下载依赖。
+在 Windows x64 上安装 64 位 Python 和 uv 后，双击项目根目录的 **`build.bat`**。脚本会安装锁定版本的依赖、下载固定版本的官方 Chrome for Testing、核对 SHA256 并打包。首次构建需要联网下载依赖和浏览器；运行成品时不会临时下载运行环境。
+
+构建最后会用发布包相同的代码归档，在独立副本和精简环境中检查 Qt、PDF、TLS、系统凭据后端、模型 SDK 及内置浏览器。浏览器只访问合成页面，不登录 BOSS、不调用真实模型、不发送消息。检查通过后窗口才会显示打包完成。
 
 也可以在 PowerShell 中执行：
 
@@ -60,11 +64,14 @@ dist/
     BossSayHello/
       BossSayHello.exe
       _internal/
+      browser/            ← 内置免安装浏览器及原版资源，不能删除
       README.md
       workspace/          ← 首次运行后自动生成，不包含在打包结果中
 ```
 
 发送程序给别人时，复制打包后尚未运行过的整个 `BossSayHello` 文件夹。构建脚本会检查打包内容，拒绝包含 docs、env 或个人运行数据。
+
+浏览器版本和来源记录在 `browser/runtime.json`。随包浏览器不依赖系统 Chrome 的版本；更新浏览器时需更新构建脚本中的版本和校验值，再重新打包。
 
 升级时，先结束本轮并关闭程序及其 BOSS 浏览器，再把旧程序旁的整个 `workspace` 复制到新 exe 旁。不要只复制 `settings.json`，否则历史和防重复发送记录不会一起转移。换电脑时 API 密钥需重新填写，因为它保存在原电脑的 Windows 系统凭据中。
 

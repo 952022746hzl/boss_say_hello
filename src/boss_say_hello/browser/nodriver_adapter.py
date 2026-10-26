@@ -14,6 +14,7 @@ from boss_say_hello.browser.port import (
     JobUnavailable,
     SessionInfo,
 )
+from boss_say_hello.browser.runtime import start_browser
 from boss_say_hello.diagnostics import failure, record
 from boss_say_hello.domain import Job
 
@@ -420,10 +421,7 @@ class NodriverAdapter:
     async def open(self, profile):
         self.discard_exited_browser()
         if self.browser is None:
-            import nodriver
-
-            profile.mkdir(parents=True, exist_ok=True)
-            self.browser = await nodriver.start(user_data_dir=str(profile), headless=False)
+            self.browser = await start_browser(profile)
             self.list_tab = await self.browser.get(dom.RECOMMEND_URL)
         else:
             await self.list_tab.get(dom.RECOMMEND_URL)
