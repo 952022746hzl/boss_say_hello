@@ -1,43 +1,67 @@
-import sqlite3
+import pytest
 
 
-def test_workspace_migrates_local_data_once_without_changing_original(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def isolate_legacy_data(tmp_path, monkeypatch):
+    # An older installed version must never pull real user data into a test.
+    monkeypatch.setattr(
+        "boss_say_hello.storage.paths.user_data_path", lambda *args, **kwargs: tmp_path / "missing", raising=False
+    )
+
+
+def test_workspace_is_fresh_beside_exe_even_with_legacy_data(tmp_path, monkeypatch):
     from boss_say_hello.storage import paths
 
-    program = tmp_path / "program"
+    program = tmp_path / "求职助手"
     program.mkdir()
     legacy = tmp_path / "legacy"
     legacy.mkdir()
     (legacy / "settings.json").write_text('{"model":"old-model"}', encoding="utf-8")
-    (legacy / "resumes").mkdir()
-    (legacy / "resumes" / "synthetic.pdf").write_bytes(b"synthetic")
-    (legacy / "browser_profile").mkdir()
-    (legacy / "browser_profile" / "Preferences").write_text("{}")
-    db = sqlite3.connect(legacy / "records.sqlite3")
-    db.execute("CREATE TABLE sample (value TEXT)")
-    db.execute("INSERT INTO sample VALUES ('retained')")
-    db.commit()
-    db.close()
-    monkeypatch.setattr(paths, "application_dir", lambda: program, raising=False)
-    monkeypatch.setattr(paths, "user_data_path", lambda *args, **kwargs: legacy)
+    monkeypatch.setattr(paths.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(paths.sys, "executable", str(program / "BossSayHello.exe"))
+    monkeypatch.setattr(paths, "user_data_path", lambda *args, **kwargs: legacy, raising=False)
+    other = tmp_path / "shortcut-start-in"
+    other.mkdir()
+    monkeypatch.chdir(other)
     root = paths.data_root()
     assert root == program / "workspace"
-    assert (root / "config" / "settings.json").read_text() == '{"model":"old-model"}'
-    assert (root / "resumes" / "synthetic.pdf").read_bytes() == b"synthetic"
-    with sqlite3.connect(root / "records.sqlite3") as reopened:
-        assert reopened.execute("SELECT value FROM sample").fetchone() == ("retained",)
-    (root / "config" / "settings.json").write_text('{"model":"new-model"}')
+    assert list(root.iterdir()) == []
+    assert not (other / "workspace").exists()
+    (root / "keep.txt").write_text("retained")
     assert paths.data_root() == root
-    assert "new-model" in (root / "config" / "settings.json").read_text()
-    assert "old-model" in (legacy / "settings.json").read_text()
-    assert (legacy / "browser_profile" / "Preferences").exists()
+    assert (root / "keep.txt").read_text() == "retained"
+    assert (legacy / "settings.json").exists()
 
 
 def test_workspace_has_stable_program_relative_path_when_no_legacy(tmp_path, monkeypatch):
     from boss_say_hello.storage import paths
 
     monkeypatch.setattr(paths, "application_dir", lambda: tmp_path, raising=False)
-    monkeypatch.setattr(paths, "user_data_path", lambda *args, **kwargs: tmp_path / "missing")
     root = paths.data_root()
     assert root == tmp_path / "workspace"
     assert root.is_dir()
+
+
+def test_installed_launcher_uses_its_directory_instead_of_cwd(tmp_path, monkeypatch):
+    from boss_say_hello.storage import paths
+
+    monkeypatch.setattr(paths, "__file__", str(tmp_path / "site-packages/pkg/storage/paths.py"))
+    monkeypatch.setattr(paths.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(paths.sys, "argv", [str(tmp_path / "launcher" / "boss-say-hello.exe")])
+    other = tmp_path / "unrelated"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    assert paths.data_root() == tmp_path / "launcher" / "workspace"
+    assert not (other / "workspace").exists()
+
+
+def test_source_launch_keeps_project_workspace_from_another_cwd(tmp_path, monkeypatch):
+    from boss_say_hello.storage import paths
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").touch()
+    monkeypatch.setattr(paths, "__file__", str(project / "src/boss_say_hello/storage/paths.py"))
+    monkeypatch.setattr(paths.sys, "frozen", False, raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert paths.data_root() == project / "workspace"

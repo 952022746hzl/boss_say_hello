@@ -29,7 +29,7 @@ def check_release_files(paths: list[str]) -> list[str]:
         root = list(parts)
         if re.match(r"boss[-_]say[-_]hello-\d", root[0]):
             root = root[1:]
-        bad_env = any(re.search(r"(^\.?env(?:rc)?($|[._-])|\.env(?:rc)?($|[._-]))", p) for p in parts)
+        bad_env = any(re.search(r"(^\.?env(?:rc)?($|[.-])|\.env(?:rc)?($|[._-]))", p) for p in parts)
         bad_data = bool(root and root[0] in {"data", "logs", "resume"}) or any(
             re.search(r"\.(sqlite3?|db)(-|$)", p) for p in parts
         )

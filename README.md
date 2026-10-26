@@ -6,7 +6,17 @@
 
 ## 1. 安装和启动
 
-需要先安装 Python 3.11 或以上版本、Chrome 浏览器，并准备好模型服务的 API 地址、模型名称和密钥。当前提供源码启动方式，没有 exe 安装包。
+可以用打包好的 exe，也可以从源码启动。两种方式都需要安装 Chrome 浏览器，并准备好模型服务的 API 地址、模型名称和密钥。
+
+### 使用 exe（不需要安装 Python）
+
+把完整的 `BossSayHello` 文件夹放在自己可以读写的位置，然后双击里面的 `BossSayHello.exe`。请保留旁边的 `_internal` 文件夹，它是程序运行所需的依赖。
+
+首次启动会在 exe 旁创建 `workspace`，用于保存配置、缓存、简历和历史。以后双击同一个 exe 即可继续使用。通过快捷方式启动，数据位置也不会改变。
+
+### 从源码启动
+
+需要 Python 3.11 或以上版本。
 
 第一次使用：打开 PowerShell，进入项目目录，依次执行：
 
@@ -31,6 +41,32 @@ Set-Location "E:\Boss\boss_say_hello"
 ```powershell
 .venv\Scripts\python.exe -m boss_say_hello
 ```
+
+### 自己打包 exe
+
+已安装 Python 和 uv 后，双击项目根目录的 **`build.bat`**。脚本会安装锁定版本的依赖并打包，完成后窗口会显示 exe 的完整路径。第一次需要联网下载依赖。
+
+也可以在 PowerShell 中执行：
+
+```powershell
+.\build.bat
+```
+
+输出结构如下；每次打包都会生成一个新目录，不覆盖旧版本和其中的数据：
+
+```text
+dist/
+  本次构建时间-编号/
+    BossSayHello/
+      BossSayHello.exe
+      _internal/
+      README.md
+      workspace/          ← 首次运行后自动生成，不包含在打包结果中
+```
+
+发送程序给别人时，复制打包后尚未运行过的整个 `BossSayHello` 文件夹。构建脚本会检查打包内容，拒绝包含 docs、env 或个人运行数据。
+
+升级时，先结束本轮并关闭程序及其 BOSS 浏览器，再把旧程序旁的整个 `workspace` 复制到新 exe 旁。不要只复制 `settings.json`，否则历史和防重复发送记录不会一起转移。换电脑时 API 密钥需重新填写，因为它保存在原电脑的 Windows 系统凭据中。
 
 ## 2. 第一次使用，按这个顺序操作
 
@@ -98,7 +134,7 @@ Set-Location "E:\Boss\boss_say_hello"
 
 ## 6. 数据存在哪里，遇到问题怎么看
 
-配置页的“打开工作目录”可以打开本地 `workspace` 文件夹。默认在项目目录下。
+配置页的“打开工作目录”可以打开本地 `workspace` 文件夹。**位置固定：exe 启动时在 exe 旁；源码启动时在项目根目录下。** 从其他终端目录或快捷方式启动，也会使用同一个位置。程序不再自动读取或导入旧 AppData 目录中的数据。
 
 | 位置 | 保存的内容 |
 |---|---|

@@ -34,6 +34,10 @@ def test_source_resume_module_allowed():
     )
 
 
+def test_python_environment_settings_modules_are_not_env_files():
+    assert checker()(["pydantic/env_settings.py", "pydantic/v1/env_settings.py"]) == []
+
+
 def test_archive_wrapper_cannot_hide_private_files():
     assert checker()(["boss_say_hello-0.1.0/docs/spec.md", "boss_say_hello-0.1.0/data/key.json"]) == [
         "boss_say_hello-0.1.0/docs/spec.md",
