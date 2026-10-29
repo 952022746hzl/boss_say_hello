@@ -163,7 +163,12 @@ class ToolExecutor:
         batch = await self.browser.candidate_batch()
         fresh = []
         for job in batch["jobs"]:
-            if job.account_id != self.run.account_id or not job.id or job.id in self.discovered_ids:
+            if (
+                job.account_id != self.run.account_id
+                or not job.id
+                or job.id in self.jobs
+                or job.id in self.done
+            ):
                 continue
             self.jobs[job.id] = job
             self.discovered_ids.add(job.id)
@@ -265,7 +270,12 @@ class ToolExecutor:
             if jid not in self.done and jid != sending_job_id and jid not in visible_ids
         ]
         for jid in stale:
-            self.skip_unavailable(jid)
+            self.discard_job_context(jid)
+            reason = "岗位暂时不在当前列表，已释放旧上下文；再次出现时重新核验"
+            self.publish("check", job_id=jid, status="pending", reasons=[reason])
+            record("agent.candidate.temporarily_missing", job_id=jid, reason=reason)
+        if stale:
+            self.browser.release_candidates(set(stale))
         for jid in list(self.jobs):
             if jid in self.done or jid == sending_job_id:
                 self.discard_job_context(jid)

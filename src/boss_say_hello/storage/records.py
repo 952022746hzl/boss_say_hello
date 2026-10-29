@@ -22,7 +22,24 @@ class RecordStore:
             CREATE UNIQUE INDEX IF NOT EXISTS active_contact ON contacts(account_id,job_id) WHERE cancelled=0;
             CREATE TABLE IF NOT EXISTS delivery_attempts(contact_id TEXT, stage TEXT, outcome TEXT, detail TEXT,
                 PRIMARY KEY(contact_id,stage));
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS contact_company_metadata(
+                contact_id TEXT PRIMARY KEY, company_key TEXT, company_name TEXT NOT NULL DEFAULT '',
+                reserved_at TEXT, succeeded_at TEXT, quota_reserved INTEGER NOT NULL DEFAULT 0,
+                timestamp_status TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS contact_company_identity
+                ON contact_company_metadata(company_key, company_name);
+            INSERT OR IGNORE INTO contact_company_metadata(contact_id,timestamp_status)
+                SELECT id,'legacy_unknown' FROM contacts;
+            CREATE TABLE IF NOT EXISTS company_identity_aliases(
+                account_id TEXT NOT NULL, company_name TEXT NOT NULL, company_key TEXT NOT NULL,
+                PRIMARY KEY(account_id,company_name,company_key));
+            CREATE INDEX IF NOT EXISTS company_alias_by_id
+                ON company_identity_aliases(account_id,company_key);
+            INSERT OR IGNORE INTO company_identity_aliases(account_id,company_name,company_key)
+                SELECT c.account_id,m.company_name,m.company_key
+                FROM contacts c JOIN contact_company_metadata m ON m.contact_id=c.id
+                WHERE m.company_key LIKE 'id:%' AND m.company_name!='';
+            PRAGMA user_version=2;
         """)
 
     def save_resume(self, resume: ResumeVersion) -> None:

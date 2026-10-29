@@ -11,7 +11,10 @@ async def test_mixed_jobs_only_eligible_contact(setup_agent, snapshot, agent_con
         job(id="model-failure"),
         job(id="unknown"),
     ]
-    x = setup_agent(snapshot(config=agent_config(auto_send=True, interval_seconds=0.1)), jobs)
+    x = setup_agent(
+        snapshot(config=agent_config(auto_send=True, interval_seconds=0.1, max_company_daily_contacts=2)),
+        jobs,
+    )
 
     async def evaluate(run, j, company, sources, **kwargs):
         if j.id == "model-failure":

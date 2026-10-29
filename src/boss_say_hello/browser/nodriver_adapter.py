@@ -63,17 +63,20 @@ class NodriverAdapter:
         self.preference_state = None
         self.goal = None
         self.candidate_seen = set()
+        self.list_progress = None
 
     def bind_goal(self, config):
         self.goal = config
         self.preference_state = None
         self.candidate_seen = set()
+        self.list_progress = None
 
     def release_run(self):
         self.goal = None
         self.control = None
         self.preference_state = None
         self.candidate_seen.clear()
+        self.list_progress = None
         self.active_job = None
         self.detail_tab = None
 
@@ -248,6 +251,14 @@ class NodriverAdapter:
         session = await self.session()
         if not session.logged_in or session.account_id != job.account_id:
             return ActionResult("failed", "当前账号不匹配，未执行", attempted=False)
+        if action == "contact" and self.list_tab is not None:
+            try:
+                progress = await self.evaluate(self.list_tab, dom.LIST_PROGRESS)
+                if not self.progress_ids(progress):
+                    raise BrowserFailure("推荐列表无可核实卡片")
+            except BrowserFailure:
+                return ActionResult("failed", "无法保存推荐列表浏览位置，未点击立即沟通", attempted=False)
+            self.list_progress = progress
         observe = "observe"
         before = {"count": 0, "seen_ids": []}
         old_tabs = {t.target_id for t in self.browser.tabs} if self.browser else set()
@@ -388,8 +399,49 @@ class NodriverAdapter:
                 observed = await self.preference_action(controls[0]["id"])
                 if not preferences_match(observed, self.goal):
                     return False
+        if self.list_progress and not await self.restore_list_progress():
+            return False
         await self.list_tab.activate()
         return True
+
+    @staticmethod
+    def progress_ids(progress):
+        return {job_id(url) for url in progress.get("anchors", [])} - {""}
+
+    async def restore_list_progress(self):
+        saved = self.list_progress
+        wanted_ids = self.progress_ids(saved)
+        previous = None
+        stalled = 0
+        # A removed anchor falls back to the saved scroll depth. Never search
+        # indefinitely for a delisted card, or mistake a scroll call for loading.
+        for attempt in range(40):
+            self.guard()
+            observed = await self.evaluate(self.list_tab, dom.LIST_PROGRESS)
+            ids = self.progress_ids(observed)
+            top = observed.get("scroll_top", 0)
+            same_position = abs(top - saved.get("scroll_top", 0)) <= 2
+            if ids and same_position:
+                record("browser.list.restored", status="position")
+                return True
+            record("browser.list.restoring", poll=attempt + 1)
+            await self.evaluate(self.list_tab, dom.restore_list_progress(saved))
+            observed = await self.evaluate(self.list_tab, dom.LIST_PROGRESS)
+            ids = self.progress_ids(observed)
+            top = observed.get("scroll_top", 0)
+            if ids and (abs(top - saved.get("scroll_top", 0)) <= 2 or bool(ids & wanted_ids)):
+                record("browser.list.restored", status="anchor" if ids & wanted_ids else "position")
+                return True
+            progress = (top, observed.get("loaded_count", 0), frozenset(ids))
+            stalled = stalled + 1 if progress == previous else 0
+            if observed.get("ended") or stalled >= self.poll_attempts:
+                break
+            previous = progress
+            self.guard()
+            await self.evaluate(self.list_tab, dom.SCROLL)
+            await asyncio.sleep(0.5)
+        record("browser.list.restore_failed", level="WARNING", reason="列表未加载到原浏览位置，请核对页面后继续")
+        return False
 
     async def evaluate(self, tab, script):
         if tab is None:
@@ -447,22 +499,35 @@ class NodriverAdapter:
             raise BrowserFailure("登录失效")
         for _attempt in range(self.poll_attempts):
             snapshot = await self.evaluate(self.list_tab, dom.CARDS)
-            cards = [
-                c
-                for c in snapshot.get("cards", [])
-                if c.get("url") not in self.candidate_seen and job_id(c.get("url", ""))
-            ]
+            cards = []
+            seen = set(self.candidate_seen)
+            duplicates = 0
+            for card in snapshot.get("cards", []):
+                jid = job_id(card.get("url", ""))
+                if not jid:
+                    continue
+                if jid in seen:
+                    duplicates += 1
+                    continue
+                seen.add(jid)
+                cards.append(card)
+            if duplicates:
+                record("browser.candidates.duplicates", count=duplicates)
             batch = cards[:5]
-            self.candidate_seen.update(c["url"] for c in batch)
+            self.candidate_seen.update(job_id(c["url"]) for c in batch)
             if batch or snapshot.get("ended"):
                 return {
                     "jobs": [parse_job(session.account_id, c, {}) for c in batch],
                     "ended": bool(snapshot.get("ended")) and len(cards) <= 5,
                 }
             self.guard()
+            record("browser.candidates.loading", poll=_attempt + 1)
             await self.evaluate(self.list_tab, dom.SCROLL)
             await asyncio.sleep(1)
         raise BrowserFailure("列表未继续加载，无法确认是否到底，请检查页面")
+
+    def release_candidates(self, job_ids):
+        self.candidate_seen.difference_update(job_ids)
 
     async def current_candidate_ids(self):
         for attempt in range(self.poll_attempts):

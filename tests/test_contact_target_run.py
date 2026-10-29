@@ -27,7 +27,14 @@ async def test_model_cannot_end_round_before_remaining_jobs_are_evaluated(
 
 async def test_150_successes_continue_past_failures_and_old_limits(config, snapshot, job, storage, tmp_path):
     ex, browser, search, delivery, _ = environment(
-        config, snapshot, job, storage, tmp_path, auto_send=True, max_contacts=150
+        config,
+        snapshot,
+        job,
+        storage,
+        tmp_path,
+        auto_send=True,
+        max_contacts=150,
+        max_company_daily_contacts=150,
     )
     from tests.fakes.clock import FakeClock
 
@@ -95,7 +102,7 @@ def test_only_verified_messages_count_toward_success_goal(snapshot, config, job,
     from boss_say_hello.delivery.journal import DeliveryJournal
 
     journal = DeliveryJournal(storage)
-    run = snapshot(config=config(auto_send=True, max_contacts=2))
+    run = snapshot(config=config(auto_send=True, max_contacts=2, max_company_daily_contacts=2))
     for jid, outcome in [
         ("failed", "failed"),
         ("unknown", "unknown"),

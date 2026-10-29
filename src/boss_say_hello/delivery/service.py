@@ -69,10 +69,22 @@ class DeliveryService:
             return event("blocked", reason="；".join(greeting_check.reasons))
         if control.pause_requested.is_set() or control.closing.is_set():
             return event("paused")
+        quota_reason = self.journal.company_limit_reason(run, job)
+        if quota_reason:
+            return event("blocked", reason=quota_reason)
         self.browser.bind_control(control)
         attempt = self.journal.reserve(run, job)
         if not attempt:
-            return event("skipped", reason="已联系、结果待核实或已达本轮成功发送目标")
+            return event(
+                "skipped",
+                reason=self.journal.last_reservation_reason or "已联系、结果待核实或已达本轮成功发送目标",
+            )
+        try:
+            return await self._deliver_reserved(run, job, greeting, control, attempt, event)
+        finally:
+            self.journal.release_company_reservation(attempt)
+
+    async def _deliver_reserved(self, run, job, greeting, control, attempt, event):
         actions = [
             ("contact", lambda: self.browser.open_contact(job)),
             ("message", lambda: self.browser.send_text(job, greeting.text)),

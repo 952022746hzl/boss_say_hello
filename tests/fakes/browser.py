@@ -39,6 +39,9 @@ class FakeBrowser:
     async def candidate_batch(self):
         return {"jobs": self.jobs, "ended": True}
 
+    def release_candidates(self, job_ids):
+        pass
+
     async def current_candidate_ids(self):
         return {job.id for job in self.jobs}
 

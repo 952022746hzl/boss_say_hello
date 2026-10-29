@@ -32,6 +32,7 @@ from boss_say_hello.storage.json_file import write_json
 from boss_say_hello.storage.paths import data_root
 from boss_say_hello.storage.records import RecordStore
 from boss_say_hello.storage.settings import ConfigStore
+from boss_say_hello.storage.workspace_lock import WorkspaceLock
 
 
 class Backend:
@@ -48,6 +49,7 @@ class Backend:
         self.lock = asyncio.Lock()
         self.credentials = CredentialStore()
         self.log = None
+        self.workspace_lock = None
 
     def emit_event(self, event):
         if self.store and event.run_id and event.kind != "state":
@@ -72,20 +74,32 @@ class Backend:
             if self.initialized:
                 return
             self.root = self.root or data_root()
-            self.log = EventLog(
-                self.root / "logs", lambda entry: self.emit(RunEvent("", "log", {"entry": entry}))
-            )
-            self.notice("logs_ready", path=self.log.root, entries=self.log.tail())
-            self.settings = ConfigStore(self.root / "config")
-            self.draft_path = self.root / "config" / "resume_draft.json"
-            self.config = self.settings.load()
-            self.store = RecordStore(self.root / "records.sqlite3")
-            self.journal = DeliveryJournal(self.store)
-            self.journal.recover_incomplete()
-            self.export_history()
-            self.initialized = True
-            self.log.record("journal.recovered")
-            self.log.record("app.ready")
+            self.workspace_lock = WorkspaceLock(self.root)
+            try:
+                # Recovery may release interrupted reservations, so it must never
+                # run while another backend still owns this workspace.
+                self.workspace_lock.acquire()
+                self.root = self.workspace_lock.root
+                self.log = EventLog(
+                    self.root / "logs", lambda entry: self.emit(RunEvent("", "log", {"entry": entry}))
+                )
+                self.notice("logs_ready", path=self.log.root, entries=self.log.tail())
+                self.settings = ConfigStore(self.root / "config")
+                self.draft_path = self.root / "config" / "resume_draft.json"
+                self.config = self.settings.load()
+                self.store = RecordStore(self.root / "records.sqlite3")
+                self.journal = DeliveryJournal(self.store)
+                self.journal.recover_incomplete()
+                self.export_history()
+                self.log.record("journal.recovered")
+                quota_notice = self.journal.company_quota_history_notice()
+                if quota_notice:
+                    self.log.record("company.quota.history_notice", reason=quota_notice)
+                self.log.record("app.ready")
+                self.initialized = True
+            except BaseException:
+                self._close_workspace_resources()
+                raise
 
     async def load_settings(self):
         self.notice("settings", config=self.config)
@@ -313,12 +327,28 @@ class Backend:
                     self.log.record("run.cleaned")
 
     async def close(self):
+        async with self.lock:
+            try:
+                await self.browser.close()
+            finally:
+                self._close_workspace_resources()
+
+    def _close_workspace_resources(self):
         try:
-            await self.browser.close()
+            try:
+                if self.store:
+                    self.store.close()
+            finally:
+                self.store = None
+                self.secrets.clear()
+                if self.log:
+                    try:
+                        self.log.record("app.closed")
+                    finally:
+                        self.log.close()
         finally:
-            if self.store:
-                self.store.close()
-            self.secrets.clear()
-            if self.log:
-                self.log.record("app.closed")
-                self.log.close()
+            self.log = None
+            self.initialized = False
+            if self.workspace_lock:
+                self.workspace_lock.release()
+                self.workspace_lock = None

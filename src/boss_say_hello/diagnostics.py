@@ -132,6 +132,14 @@ MESSAGES = {
     "agent.model.correction": "模型结果校验未通过，已限制纠正次数",
     "agent.run.failed": "代理运行中断",
     "browser.closed": "浏览器已退出，已暂停任务；点击打开 BOSS 登录可重新启动",
+    "browser.candidates.duplicates": "已过滤重复岗位，继续寻找新的候选",
+    "browser.candidates.loading": "正在向下加载更多岗位",
+    "browser.list.restoring": "沟通返回后正在恢复列表浏览位置",
+    "browser.list.restored": "已核实恢复列表浏览位置",
+    "browser.list.restore_failed": "列表浏览位置恢复失败",
+    "agent.candidate.temporarily_missing": "候选暂未显示，释放过期内容，重新出现后再核验",
+    "company.quota.blocked": "跳过当前公司岗位",
+    "company.quota.history_notice": "旧记录公司配额说明",
     "app.ready": "后台服务已就绪",
     "app.closed": "后台服务已关闭",
     "operation.started": "后台操作开始",
@@ -266,7 +274,12 @@ class EventLog:
             ) + TOOL_LABELS.get(fields.get("tool"), fields.get("tool", ""))
         elif event == "agent.tool.blocked":
             message = "本次操作未执行：" + fields.get("reason", "岗位条件尚未满足")
-        elif event in {"agent.tool.failed", "agent.model.correction"} and fields.get("reason"):
+        elif event in {
+            "agent.tool.failed",
+            "agent.model.correction",
+            "company.quota.blocked",
+            "company.quota.history_notice",
+        } and fields.get("reason"):
             message += "：" + fields["reason"]
         elif event == "browser.preference.started":
             action = "点击"

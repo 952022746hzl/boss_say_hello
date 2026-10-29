@@ -47,6 +47,7 @@ class AppConfig:
     auto_send: bool = True
     min_score: int = 70
     max_contacts: int = 20
+    max_company_daily_contacts: int = 1
     interval_seconds: float = 30.0
     model_timeout_seconds: int = 180
     target_title: str = ""
@@ -71,6 +72,11 @@ class AppConfig:
             raise ValueError("匹配分必须在0到100之间")
         if type(self.max_contacts) is not int or self.max_contacts < 1:
             raise ValueError("每轮成功发送目标必须为正整数")
+        if (
+            type(self.max_company_daily_contacts) is not int
+            or not 1 <= self.max_company_daily_contacts <= 10000
+        ):
+            raise ValueError("同公司每日成功岗位上限必须为 1 到 10000 的整数")
         if (
             isinstance(self.interval_seconds, bool)
             or not isfinite(self.interval_seconds)

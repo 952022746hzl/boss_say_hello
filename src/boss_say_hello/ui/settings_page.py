@@ -134,11 +134,20 @@ class SettingsPage(QWidget):
         self.min_score.setRange(0, 100)
         self.max_contacts = QSpinBox()
         self.max_contacts.setRange(1, 10000)
+        self.max_company_daily_contacts = QSpinBox()
+        self.max_company_daily_contacts.setRange(1, 10000)
+        self.max_company_daily_contacts.setSuffix(" 个岗位")
+        self.max_company_daily_contacts.setToolTip(
+            "同一 BOSS 账号、同一公司每天成功发送招呼语的岗位数，默认 1。"
+            "按北京时间自然日计算，跨轮次和重启保留；预览不受限制。"
+            "旧版缺少成功日期的记录不计当天公司配额，仍用于防止同一岗位重复联系。"
+        )
         self.interval = QDoubleSpinBox()
         self.interval.setRange(0.1, 86400)
         self.interval.setSuffix(" 秒")
         limits.addRow(required_label("最低匹配分"), self.min_score)
         limits.addRow(required_label("每轮成功发送目标（岗位数）"), self.max_contacts)
+        limits.addRow(required_label("同公司每日成功岗位上限"), self.max_company_daily_contacts)
         limits.addRow(required_label("联系间隔"), self.interval)
         self.auto_send = QCheckBox("自动发送（点击开始后按本轮快照执行）")
         limits.addRow(self.auto_send)
@@ -159,7 +168,13 @@ class SettingsPage(QWidget):
             field.textChanged.connect(self.schedule_save)
         for field in self.prompts:
             field.textChanged.connect(self.schedule_save)
-        for field in (self.min_score, self.max_contacts, self.interval, self.model_timeout):
+        for field in (
+            self.min_score,
+            self.max_contacts,
+            self.max_company_daily_contacts,
+            self.interval,
+            self.model_timeout,
+        ):
             field.valueChanged.connect(self.schedule_save)
         self.auto_send.toggled.connect(self.schedule_save)
 
@@ -230,6 +245,7 @@ class SettingsPage(QWidget):
             edit.setPlainText(text)
         self.min_score.setValue(config.min_score)
         self.max_contacts.setValue(config.max_contacts)
+        self.max_company_daily_contacts.setValue(config.max_company_daily_contacts)
         self.interval.setValue(config.interval_seconds)
         self.auto_send.setChecked(config.auto_send)
         self.loading = False
@@ -267,6 +283,7 @@ class SettingsPage(QWidget):
             prompts=PromptSet(*(p.toPlainText().strip() for p in self.prompts)),
             min_score=self.min_score.value(),
             max_contacts=self.max_contacts.value(),
+            max_company_daily_contacts=self.max_company_daily_contacts.value(),
             interval_seconds=self.interval.value(),
             auto_send=self.auto_send.isChecked(),
             **self.agent.values(),

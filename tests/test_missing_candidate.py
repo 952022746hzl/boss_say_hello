@@ -99,7 +99,8 @@ async def test_returned_refreshed_list_drops_only_missing_pending_candidates(
         RunEvent(ex.run.id, "delivery", {"job_id": "j1", "status": "sent", "returned_to_list": True})
     ]
     await ex.execute("send_greeting", {"job_id": "j1", "reason": "合成测试，不真实发送"})
-    assert ex.done == {"j1", "j2"}
+    assert ex.done == {"j1"}
+    assert "j2" not in ex.jobs
     assert "j2" not in ex.greetings
     assert not ex.control.pause_requested.is_set()
     assert ex.receipt["document"] == "refreshed"

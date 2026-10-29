@@ -6,7 +6,7 @@ from boss_say_hello.agent.contracts import EligibilityBlocked, validate_agent_go
 from boss_say_hello.ai.schemas import AiFailure, AiRequestInterrupted
 from boss_say_hello.browser.port import ActionBlocked, BrowserFailure
 from boss_say_hello.browser.preferences import compact, preferences_match
-from boss_say_hello.diagnostics import failure, scope
+from boss_say_hello.diagnostics import failure, record, scope
 from boss_say_hello.matching.rules import check_job
 from boss_say_hello.runs.control import wait_until_ready
 
@@ -48,6 +48,11 @@ class AgentEngine:
         check = check_job(ex.run.config, ex.jobs[jid])
         if check.status != "pass":
             return "skip_job", "岗位硬条件未通过：" + "；".join(check.reasons)
+        if ex.run.config.auto_send:
+            quota_reason = ex.journal.company_limit_reason(ex.run, ex.jobs[jid])
+            if quota_reason:
+                record("company.quota.blocked", job_id=jid, reason=quota_reason)
+                return "skip_job", quota_reason
         if jid not in ex.company_checked:
             return "search_company", "程序读取公司资料缓存，必要时执行一次综合查询"
         if not ex.sources.get(jid):

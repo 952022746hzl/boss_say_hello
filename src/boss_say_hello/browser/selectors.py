@@ -60,16 +60,66 @@ DETAIL = r"""/* DETAIL */ JSON.stringify((() => {
   recruiter_name:typeof data?.bossInfo?.name==='string'?data.bossInfo.name:text('.boss-info .name, .boss-info-attr .name')};
 })())"""
 
-SCROLL = r"""/* SCROLL */ JSON.stringify((() => {
+_LIST_ROOT = r"""
  const card=document.querySelector('.job-card-box');
  let el=card?.parentElement;
+ let root=document.scrollingElement || document.documentElement;
  while(el && el!==document.body){
    if(el.scrollHeight>el.clientHeight+20 && /auto|scroll/.test(getComputedStyle(el).overflowY)){
-     el.scrollTop+=Math.max(el.clientHeight,600); return true;
+     root=el; break;
    } el=el.parentElement;
  }
- window.scrollBy(0,Math.max(innerHeight,600)); return true;
+"""
+
+SCROLL = (
+    "/* SCROLL */ JSON.stringify((() => {"
+    + _LIST_ROOT
+    + "root.scrollTop+=Math.max(root.clientHeight,600); return true;})())"
+)
+
+LIST_PROGRESS = (
+    "/* LIST_PROGRESS */ JSON.stringify((() => {"
+    + _LIST_ROOT
+    + r"""
+ const cards=[...document.querySelectorAll('.job-card-box')];
+ const viewportTop=root===document.scrollingElement?0:root.getBoundingClientRect().top;
+ const viewportBottom=viewportTop+root.clientHeight;
+ const visible=cards.filter(e=>{
+   const rect=e.getBoundingClientRect();
+   return rect.bottom>viewportTop && rect.top<viewportBottom && e.getClientRects().length;
+ });
+ const anchors=visible.map(e=>e.querySelector('a[href*="/job_detail/"]')?.href || '').filter(Boolean);
+ const ended=[...document.querySelectorAll('.load-more,.job-list-empty,.no-more')]
+   .some(e=>e.getClientRects().length && /没有更多|暂无职位|暂无推荐|到底了/.test(e.innerText));
+ return {document:String(performance.timeOrigin),scroll_top:root.scrollTop,
+   anchors,anchor_offset:visible[0]?.getBoundingClientRect().top-viewportTop,
+   loaded_count:cards.length,ended};
 })())"""
+)
+
+
+def restore_list_progress(progress):
+    import json
+
+    return (
+        "/* RESTORE_LIST_PROGRESS */ JSON.stringify((() => {"
+        + _LIST_ROOT
+        + "const saved="
+        + json.dumps(progress)
+        + ";\n"
+        + r"""
+ const paths=new Set(saved.anchors.map(url=>new URL(url).pathname));
+ const anchor=[...document.querySelectorAll('.job-card-box')].find(e=>{
+   const url=e.querySelector('a[href*="/job_detail/"]')?.href;
+   return url && paths.has(new URL(url).pathname);
+ });
+ const viewportTop=root===document.scrollingElement?0:root.getBoundingClientRect().top;
+ const top=anchor && Number.isFinite(saved.anchor_offset)
+   ? root.scrollTop+anchor.getBoundingClientRect().top-viewportTop-saved.anchor_offset
+   : saved.scroll_top;
+ root.scrollTop=Math.max(0,top); return true;
+})())"""
+    )
 
 CAPABILITIES = r"""/* CAPABILITIES */ JSON.stringify((() => {
  const input=document.querySelector('#chat-input');

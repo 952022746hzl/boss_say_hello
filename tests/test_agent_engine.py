@@ -22,6 +22,7 @@ def environment(config, snapshot, job, storage, tmp_path, **overrides):
         bind_control=lambda c: None,
         bind_goal=lambda c: None,
         release_run=lambda: None,
+        release_candidates=lambda job_ids: None,
         preference_snapshot=AsyncMock(
             return_value={
                 "document": "doc",

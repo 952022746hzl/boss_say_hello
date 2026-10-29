@@ -36,6 +36,7 @@ def job():
             "Python service development",
             "https://www.zhipin.com/job_detail/j1.html",
             "new",
+            company_id="co1",
         ),
         **kw,
     )

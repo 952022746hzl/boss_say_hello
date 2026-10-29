@@ -34,7 +34,7 @@ async def test_ineligible_never_sends(change, setup_agent, snapshot, agent_confi
 
 async def test_limit_interval_and_snapshot(setup_agent, snapshot, agent_config, job):
     run = snapshot(config=agent_config(auto_send=True, max_contacts=2, interval_seconds=9))
-    x = setup_agent(run, [job(id=f"j{i}") for i in range(5)])
+    x = setup_agent(run, [job(id=f"j{i}", company_id=f"co{i}") for i in range(5)])
     times = []
     x.browser.after = lambda stage: times.append(x.clock.monotonic()) if stage == "contact" else None
     edited = replace(run.config, max_contacts=99)
@@ -49,7 +49,7 @@ async def test_pause_resume_keeps_success_goal_and_skips_partial_contact(
     setup_agent, snapshot, agent_config, job
 ):
     run = snapshot(config=agent_config(auto_send=True, max_contacts=2))
-    x = setup_agent(run, [job(id=f"j{i}") for i in range(3)])
+    x = setup_agent(run, [job(id=f"j{i}", company_id=f"co{i}") for i in range(3)])
     paused = asyncio.Event()
 
     def emit(event):

@@ -72,7 +72,7 @@ async def test_refreshed_list_removes_job_and_company_context_but_preserves_hist
     assert "j1" not in ex.companies and "j2" not in ex.sources and "j2" not in ex.details
     assert ex.discovered_count() == 3
     assert any(e.kind == "delivery" and e.payload["status"] == "sent" for e in storage.events(ex.run.id))
-    assert "j1" in ex.done and "j2" in ex.done
+    assert "j1" in ex.done and "j2" not in ex.done
     assert ex.active_job_id() == "j3"
 
 
@@ -109,9 +109,9 @@ async def test_auto_mode_sends_current_job_then_reads_fresh_candidates(
     assert set(offered(ex)) == {"list_jobs"}
     browser.candidate_batch.return_value = {"jobs": [job(), job(id="old"), job(id="new")], "ended": True}
     await ex.execute("list_jobs", {"reason": "刷新后的候选"})
-    assert set(ex.jobs) == {"new"}  # Cleaned IDs cannot be reintroduced in the same run.
+    assert set(ex.jobs) == {"old", "new"}  # Only completed jobs stay excluded after a refresh.
     assert ex.discovered_count() == 3
-    assert ex.active_job_id() == "new"
+    assert ex.active_job_id() == "old"
     delivery.deliver.assert_awaited_once()
 
 
@@ -151,7 +151,7 @@ async def test_resume_after_sent_but_failed_refresh_recovers_new_list(
     await AgentEngine(ex, SimpleNamespace()).prepare_candidates()
     assert set(ex.jobs) == {"new"}
     assert ex.active_job_id() == "new"
-    assert {"j1", "old"} <= ex.done
+    assert "j1" in ex.done and "old" not in ex.done
     assert "j1" not in ex.sources
     delivery.deliver.assert_awaited_once()
 
